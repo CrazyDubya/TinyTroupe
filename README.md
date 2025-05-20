@@ -142,6 +142,17 @@ To run the library, you need:
 
 Now you should be able to `import tinytroupe` in your Python code or Jupyter notebooks. 🥳
 
+### Installing with Ollama Support
+
+To install TinyTroupe with Ollama support for local models:
+
+```bash
+# Basic installation with Ollama support
+pip install git+https://github.com/microsoft/TinyTroupe.git@main[ollama]
+```
+
+You'll also need to install and run Ollama separately. See the [Ollama Integration Guide](./docs/ollama_integration.md) for detailed instructions.
+
 *Note: If you have any issues, try to clone the repository and install from the local repository, as described below.*
 
 
