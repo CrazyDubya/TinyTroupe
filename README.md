@@ -1,48 +1,17 @@
-# TinyTroupe 🤠🤓🥸🧐
-*LLM-powered multiagent persona simulation for imagination enhancement and business insights.*
+# TinyTroupe 🤠🤓🥸 
 
-<p align="center">
-  <img src="./docs/tinytroupe_stage.png" alt="A tiny office with tiny people doing some tiny jobs.">
-</p>
+<img src="./docs/logo_tinytroupe.png" alt="TinyTroupe" width="200"/>
 
-*TinyTroupe* is an experimental Python library that allows the **simulation** of people with specific personalities, interests, and goals. These artificial agents - `TinyPerson`s - can listen to us and one another, reply back, and go about their lives in simulated `TinyWorld` environments. This is achieved by leveraging the power of Large Language Models (LLMs), notably GPT-4, to generate realistic simulated behavior. This allows us to investigate a wide range of **convincing interactions** and **consumer types**, with **highly customizable personas**, under **conditions of our choosing**. The focus is thus on *understanding* human behavior and not on directly *supporting it* (like, say, AI assistants do) -- this results in, among other things, specialized mechanisms that make sense only in a simulation setting. Further, unlike other *game-like* LLM-based simulation approaches, TinyTroupe aims at enlightening productivity and business scenarios, thereby contributing to more successful projects and products. Here are some application ideas to **enhance human imagination**:
-
-  - **Advertisement:** TinyTroupe can **evaluate digital ads (e.g., Bing Ads)** offline with a simulated audience before spending money on them!
-  - **Software Testing:** TinyTroupe can **provide test input** to systems (e.g., search engines, chatbots or copilots) and then **evaluate the results**.
-  - **Training and exploratory data:** TinyTroupe can generate realistic **synthetic data** that can be later used to train models or be subject to opportunity analyses.
-  - **Product and project management:** TinyTroupe can **read project or product proposals** and **give feedback** from the perspective of **specific personas** (e.g., physicians, lawyers, and knowledge workers in general).
-  - **Brainstorming:** TinyTroupe can simulate **focus groups** and deliver great product feedback at a fraction of the cost!
-
-In all of the above, and many others, we hope experimenters can **gain insights** about their domain of interest, and thus make better decisions. 
-
-We are releasing *TinyTroupe* at a relatively early stage, with considerable work still to be done, because we are looking for feedback and contributions to steer development in productive directions. We are particularly interested in finding new potential use cases, for instance in specific industries. 
-
->[!NOTE] 
->🚧 **WORK IN PROGRESS: expect frequent changes**.
->TinyTroupe is an ongoing research project, still under **very significant development** and requiring further **tidying up**. In particular, the API is still subject to frequent changes. Experimenting with API variations is essential to shape it correctly, but we are working to stabilize it and provide a more consistent and friendly experience over time. We appreciate your patience and feedback as we continue to improve the library.
-
->[!CAUTION] 
->⚖️ **Read the LEGAL DISCLAIMER.**
->TinyTroupe is for research and simulation only. You are fully responsible for any use you make of the generated outputs. Various important additional legal considerations apply and constrain its use. Please read the full [Legal Disclaimer](#legal-disclaimer) section below before using TinyTroupe.
-
-
-## Contents
-
-- 📰 [Latest News](#latest-news)
-- 📚 [Examples](#examples)
-- 🛠️ [Pre-requisites](#pre-requisites)
-- 📥 [Installation](#installation)
-- 🌟 [Principles](#principles)
-- 🏗️ [Project Structure](#project-structure)
-- 📖 [Using the Library](#using-the-library)
-- 🤝 [Contributing](#contributing)
-- 🙏 [Acknowledgements](#acknowledgements)
-- 📜 [Citing TinyTroupe](#how-to-cite-tinytroupe)
-- ⚖️ [Legal Disclaimer](#legal-disclaimer)
-- ™️ [Trademarks](#trademarks)
-
+TinyTroupe is a flexible, `openai`-api based multi-agent framework, focused on design, experimentation, and responsible AI.
 
 ## LATEST NEWS
+**[2025-05-20] Release 0.5.0 with Ollama integration for local models:**
+  - Added support for using local models via Ollama integration
+  - You can now run TinyTroupe with your own local LLMs for improved privacy and reduced costs
+  - Seamlessly switch between cloud-based (OpenAI, Azure) and local models
+  - See [Ollama Integration](./docs/ollama_integration.md) for details and usage
+
+**[2025-01-29] Release 0.4.0 with various improvements. Some highlights:**
 **[2025-05-20] Release 0.5.0 with Ollama integration for local models:**
   - Added support for using local models via Ollama integration
   - You can now run TinyTroupe with your own local LLMs for improved privacy and reduced costs
