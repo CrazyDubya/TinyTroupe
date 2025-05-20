@@ -723,5 +723,19 @@ def force_api_cache(cache_api_calls, cache_file_name=default["cache_file_name"])
 register_client("openai", OpenAIClient())
 register_client("azure", AzureClient())
 
-
+# Load Ollama client if available
+try:
+    # Check if the ollama module is available
+    if importlib.util.find_spec("ollama") is not None:
+        # Import the OllamaClient class from ollama_utils
+        from tinytroupe.ollama_utils import OllamaClient
+        # Register the Ollama client
+        register_client("ollama", OllamaClient())
+        logger.info("Ollama client registered successfully")
+    else:
+        logger.warning("Ollama package not found, client not registered")
+except ImportError as e:
+    logger.warning(f"Could not import Ollama client: {e}")
+except Exception as e:
+    logger.error(f"Error registering Ollama client: {e}")
 
