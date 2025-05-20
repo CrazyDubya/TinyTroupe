@@ -9,6 +9,7 @@ import configparser
 from pydantic import BaseModel
 from typing import Union
 import textwrap  # to dedent strings
+import importlib.util
 
 import tiktoken
 from tinytroupe import utils
