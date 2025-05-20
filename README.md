@@ -12,10 +12,6 @@ TinyTroupe is a flexible, `openai`-api based multi-agent framework, focused on d
   - See [Ollama Integration](./docs/ollama_integration.md) for details and usage
 
 **[2025-01-29] Release 0.4.0 with various improvements. Some highlights:**
-**[2025-05-20] Release 0.5.0 with Ollama integration for local models:**
-  - Added support for using local models via Ollama integration
-  - You can now run TinyTroupe with your own local LLMs for improved privacy and reduced costs
-  - Seamlessly switch between cloud-based (OpenAI, Azure) and local models
   - See [Ollama Integration](./docs/ollama_integration.md) for details and usage
 
 **[2025-01-29] Release 0.4.0 with various improvements. Some highlights:**
