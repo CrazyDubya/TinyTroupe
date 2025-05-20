@@ -14,7 +14,8 @@ logger = logging.getLogger("tinytroupe")
 logger.setLevel(logging.INFO)
 
 # Import TinyTroupe
-import tinytroupe as tt
+from tinytroupe.agent.tiny_person import TinyPerson
+from tinytroupe.environment.tiny_world import TinyWorld
 from tinytroupe.openai_utils import configure, client
 
 def main():
@@ -24,40 +25,39 @@ def main():
     # Verify we're using the Ollama client
     print(f"Using client: {client().__class__.__name__}")
     
+    # Create a world for our personas
+    world = TinyWorld()
+    
     # Create a persona
-    local_persona = tt.Persona(
+    local_persona = TinyPerson(
         name="LocalExpert",
         backstory="I am an AI assistant running on a local model through Ollama. I help answer questions using locally available computing resources.",
         traits=["helpful", "concise", "knowledgeable"],
-        role="assistant"
+        role="assistant",
+        world=world
     )
     
-    # Create a conversation
-    conversation = tt.Conversation()
-    
-    # Add the persona to the conversation
-    conversation.add_persona(local_persona)
+    # Add the persona to the world
+    world.add_agent(local_persona)
     
     # Start the conversation with a question
     print("Sending message to Ollama-powered persona...")
-    response = conversation.send_message(
-        sender="user",
-        content="Hello, can you tell me what are the advantages of using local models like yourself instead of cloud-based LLMs?",
-        target="LocalExpert"
+    response = world.broadcast(
+        "Hello, can you tell me what are the advantages of using local models like yourself instead of cloud-based LLMs?",
+        source=None
     )
     
     # Print the response
-    print(f"\nLocalExpert says: {response}\n")
+    print(f"\nLocalExpert's response will appear in the logs\n")
     
     # Continue the conversation
     print("Sending follow-up message...")
-    response = conversation.send_message(
-        sender="user",
-        content="What are the trade-offs between using local models versus cloud-based models?",
-        target="LocalExpert"
+    response = world.broadcast(
+        "What are the trade-offs between using local models versus cloud-based models?",
+        source=None
     )
     
-    print(f"\nLocalExpert says: {response}\n")
+    print(f"\nLocalExpert's response will appear in the logs\n")
     
     # Switch back to OpenAI (if keys are available)
     print("Switching back to OpenAI...")
