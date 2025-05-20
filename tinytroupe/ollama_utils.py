@@ -26,7 +26,19 @@ class OllamaClient(OpenAIClient):
     def __init__(self, cache_api_calls=default["cache_api_calls"], cache_file_name=default["cache_file_name"]) -> None:
         logger.debug("Initializing OllamaClient")
         super().__init__(cache_api_calls, cache_file_name)
-        self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        
+        # Get config for Ollama
+        config = utils.read_config_file()
+        self.ollama_host = config["Ollama"].get("HOST", "http://localhost:11434")
+        self.ollama_model = config["Ollama"].get("MODEL", "long-gemma")
+        self.embedding_fallback = config["Ollama"].getboolean("EMBEDDING_FALLBACK", True)
+        self.embedding_model = config["Ollama"].get("EMBEDDING_MODEL", "long-gemma")
+        
+        # Allow overriding with environment variables
+        if os.getenv("OLLAMA_HOST"):
+            self.ollama_host = os.getenv("OLLAMA_HOST")
+            
+        logger.debug(f"Ollama config - Host: {self.ollama_host}, Model: {self.ollama_model}, Embedding fallback: {self.embedding_fallback}")
         
     def _setup_from_config(self):
         """
