@@ -40,6 +40,9 @@ class OllamaClient(OpenAIClient):
             
         logger.debug(f"Ollama config - Host: {self.ollama_host}, Model: {self.ollama_model}, Embedding fallback: {self.embedding_fallback}")
         
+        # Initialize the Ollama client
+        self._setup_from_config()
+        
     def _setup_from_config(self):
         """
         Sets up the Ollama client configurations.
