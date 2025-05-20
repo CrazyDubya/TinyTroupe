@@ -15,11 +15,11 @@ logger.setLevel(logging.INFO)
 
 # Import TinyTroupe
 import tinytroupe as tt
-from tinytroupe.openai_utils import force_api_type, client
+from tinytroupe.openai_utils import configure, client
 
 def main():
-    # Force using Ollama for this session
-    force_api_type("ollama")
+    # Configure to use Ollama for this session
+    configure(api_type="ollama")
     
     # Verify we're using the Ollama client
     print(f"Using client: {client().__class__.__name__}")
@@ -62,7 +62,7 @@ def main():
     # Switch back to OpenAI (if keys are available)
     print("Switching back to OpenAI...")
     try:
-        force_api_type("openai")
+        configure(api_type="openai")
         print(f"Now using client: {client().__class__.__name__}")
     except Exception as e:
         print(f"Could not switch to OpenAI: {e}")
