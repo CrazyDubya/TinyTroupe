@@ -43,6 +43,12 @@ We are releasing *TinyTroupe* at a relatively early stage, with considerable wor
 
 
 ## LATEST NEWS
+**[2025-05-20] Release 0.5.0 with Ollama integration for local models:**
+  - Added support for using local models via Ollama integration
+  - You can now run TinyTroupe with your own local LLMs for improved privacy and reduced costs
+  - Seamlessly switch between cloud-based (OpenAI, Azure) and local models
+  - See [Ollama Integration](./docs/ollama_integration.md) for details and usage
+
 **[2025-01-29] Release 0.4.0 with various improvements. Some highlights:**
   - Personas have deeper specifications now, including  personality traits, preferences, beliefs, and more. It is likely we'll further expand this in the future. 
   - `TinyPerson`s can now be defined as JSON files as well, and loaded via the `TinyPerson.load_specification()`, for greater convenience. After loading the JSON file, you can still modify the agent programmatically. See the [examples/agents/](./examples/agents/) folder for examples.
