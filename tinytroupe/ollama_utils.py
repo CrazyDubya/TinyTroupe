@@ -54,6 +54,11 @@ class OllamaClient(OpenAIClient):
         # Extract and convert OpenAI API parameters to Ollama API parameters
         messages = chat_api_params.get("messages", [])
         
+        # Use the default Ollama model if none is specified or if OpenAI model is used
+        if model != self.ollama_model and not model.startswith("ollama/"):
+            logger.debug(f"Using default Ollama model '{self.ollama_model}' instead of '{model}'")
+            model = self.ollama_model
+        
         # Ollama doesn't support "stream" parameter in the same way as OpenAI
         if "stream" in chat_api_params:
             del chat_api_params["stream"]
