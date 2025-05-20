@@ -695,7 +695,33 @@ def client():
     return _get_client_for_api_type(api_type)
 
 
-# TODO simplify the custom configuration methods below
+def configure(api_type=None, cache_api_calls=None, cache_file_name=None, **kwargs):
+    """
+    Configure the TinyTroupe OpenAI client with multiple settings at once.
+    
+    This is a unified configuration method that replaces the individual force_* methods.
+    
+    Args:
+        api_type (str, optional): The API type to use (openai, azure, ollama).
+        cache_api_calls (bool, optional): Whether to cache API calls.
+        cache_file_name (str, optional): The name of the file to use for caching API calls.
+        **kwargs: Additional configuration options for future extensions.
+    
+    Returns:
+        The currently active client after applying the configuration.
+    """
+    if api_type is not None:
+        force_api_type(api_type)
+        
+    if cache_api_calls is not None:
+        if cache_file_name is None:
+            cache_file_name = default["cache_file_name"]
+        force_api_cache(cache_api_calls, cache_file_name)
+    
+    # Return the current client for convenience
+    return client()
+
+# Legacy methods maintained for backward compatibility
 
 def force_api_type(api_type):
     """
