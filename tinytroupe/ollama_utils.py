@@ -111,23 +111,32 @@ class OllamaClient(OpenAIClient):
         """
         # If no model is specified, use the default embedding model from config
         if model is None:
-            model = default["embedding_model"]
+            model = self.embedding_model
             
         try:
             # Use Ollama's embedding endpoint
             response = self.client.embeddings(model=model, prompt=text)
-            return response.get("embedding", [])
+            embedding = response.get("embedding", [])
+            if embedding:
+                return embedding
+            else:
+                raise Exception("Empty embedding returned from Ollama")
         except Exception as e:
             logger.error(f"Error getting embedding from Ollama: {e}")
-            # Fallback to a simpler mechanism or return empty embedding
-            logger.warning("Falling back to OpenAI for embeddings if available")
-            try:
-                # Try using OpenAI's embedding if available
-                openai_client = OpenAIClient()
-                return openai_client.get_embedding(text, model=default["embedding_model"])
-            except Exception as eb:
-                logger.error(f"Fallback to OpenAI embedding also failed: {eb}")
-                return []
+            
+            # Check if fallback to OpenAI is enabled
+            if self.embedding_fallback:
+                logger.warning("Falling back to OpenAI for embeddings")
+                try:
+                    # Try using OpenAI's embedding if available
+                    openai_client = OpenAIClient()
+                    return openai_client.get_embedding(text, model=default["embedding_model"])
+                except Exception as eb:
+                    logger.error(f"Fallback to OpenAI embedding also failed: {eb}")
+            
+            # Return empty embedding as last resort
+            logger.warning("Returning empty embedding as fallback failed or is disabled")
+            return []
 
     def _raw_embedding_model_call(self, text, model):
         """
