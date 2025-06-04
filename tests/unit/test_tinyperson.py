@@ -7,13 +7,20 @@ sys.path.insert(0, '../../tinytroupe/') # ensures that the package is imported f
 sys.path.insert(0, '../../') # ensures that the package is imported from the parent directory, not the Python installation
 sys.path.insert(0, '..') # ensures that the package is imported from the parent directory, not the Python installation
 
-#sys.path.append('../../tinytroupe/')
-#sys.path.append('../../')
-#sys.path.append('..')
+from tinytroupe.agent.tiny_person import TinyPerson
+from tinytroupe.agent.memory import EpisodicMemory, SemanticMemory
+from tinytroupe.examples import create_oscar_the_architect, create_lisa_the_data_scientist, create_oscar_the_architect_2, create_lisa_the_data_scientist_2
+import tinytroupe.openai_utils as openai_utils # For mocking
 
-from tinytroupe.examples import create_oscar_the_architect, create_oscar_the_architect_2, create_lisa_the_data_scientist, create_lisa_the_data_scientist_2
+from testing_utils import * # Assumes get_relative_to_test_path, EXPORT_BASE_FOLDER etc. are here
+import os # For test_save_specification
 
-from testing_utils import *
+# Imports for new tests
+import unittest
+from unittest.mock import patch, MagicMock, call
+import datetime
+
+# Existing tests ... (truncated for brevity in thought process, but will be in the final file)
 
 def test_act(setup):
 
@@ -142,5 +149,106 @@ def test_save_specification(setup):
 def test_programmatic_definitions(setup):
     for agent in [create_oscar_the_architect_2(), create_lisa_the_data_scientist_2()]:
         agent.listen_and_act("Tell me a bit about your life.")
-    
-    
+
+
+# New Test Class for _extract_and_store_semantic_insight
+class TestTinyPersonSemanticExtraction(unittest.TestCase):
+
+    def setUp(self):
+        # Basic TinyPerson setup for these specific tests
+        # We can use a real SemanticMemory instance as we're mocking the LLM call
+        # and the actual store method of SemanticMemory.
+        self.agent = TinyPerson(name="TestInsightAgent")
+        # Ensure semantic_memory is initialized if not done by default in TinyPerson constructor
+        if not hasattr(self.agent, 'semantic_memory') or self.agent.semantic_memory is None:
+            self.agent.semantic_memory = SemanticMemory()
+
+
+    @patch('tinytroupe.openai_utils.client') # Mocking the LLM client
+    def test_extract_and_store_semantic_insight_success(self, mock_openai_client):
+        # 1. Successful insight extraction
+        mock_llm_instance = MagicMock()
+        mock_llm_instance.send_message.return_value = {'content': "Meaningful insight about the event."}
+        mock_openai_client.return_value = mock_llm_instance
+
+        self.agent.semantic_memory.store = MagicMock() # Mock the store method of semantic memory
+
+        episodic_entry = {
+            'type': 'CONVERSATION',
+            'content': 'A user said hello.',
+            'simulation_timestamp': '2023-01-01T12:00:00Z'
+        }
+
+        self.agent._extract_and_store_semantic_insight(episodic_entry)
+
+        # Verify LLM call
+        mock_llm_instance.send_message.assert_called_once()
+        # print(mock_llm_instance.send_message.call_args) # For debugging the call if needed
+
+        # Verify semantic_memory.store call
+        self.agent.semantic_memory.store.assert_called_once()
+        call_args = self.agent.semantic_memory.store.call_args
+
+        self.assertIsNotNone(call_args)
+        payload = call_args[0][0] # First positional argument of the call
+
+        self.assertEqual(payload['type'], 'semantic_insight')
+        self.assertEqual(payload['content'], "Meaningful insight about the event.")
+        self.assertEqual(payload['source_event_type'], 'CONVERSATION')
+        self.assertEqual(payload['source_event_timestamp'], '2023-01-01T12:00:00Z')
+        self.assertTrue('simulation_timestamp' in payload) # Timestamp of insight extraction
+
+
+    @patch('tinytroupe.openai_utils.client')
+    @patch('tinytroupe.agent.tiny_person.logger') # Mock logger in TinyPerson module
+    def test_extract_and_store_semantic_insight_no_insight(self, mock_logger, mock_openai_client):
+        # 2. Handling of "None" or empty insight from LLM
+        mock_llm_instance = MagicMock()
+        # Test with "None"
+        mock_llm_instance.send_message.return_value = {'content': "None"}
+        mock_openai_client.return_value = mock_llm_instance
+
+        self.agent.semantic_memory.store = MagicMock()
+
+        episodic_entry = {'type': 'TEST_EVENT', 'content': 'Test content', 'simulation_timestamp': '2023-01-01T13:00:00Z'}
+        self.agent._extract_and_store_semantic_insight(episodic_entry)
+
+        self.agent.semantic_memory.store.assert_not_called()
+        mock_logger.debug.assert_any_call(f"[{self.agent.name}] No distinct semantic insight extracted from event: Event Type: TEST_EVENT, Content: Test content, Timestamp: 2023-01-01T13:00:00Z")
+
+        # Test with empty string
+        mock_llm_instance.send_message.return_value = {'content': "  "} # Whitespace only
+        mock_openai_client.return_value = mock_llm_instance
+        self.agent.semantic_memory.store.reset_mock() # Reset for the next check
+        mock_logger.reset_mock()
+
+        self.agent._extract_and_store_semantic_insight(episodic_entry)
+        self.agent.semantic_memory.store.assert_not_called()
+        mock_logger.debug.assert_any_call(f"[{self.agent.name}] No distinct semantic insight extracted from event: Event Type: TEST_EVENT, Content: Test content, Timestamp: 2023-01-01T13:00:00Z")
+
+
+    @patch('tinytroupe.openai_utils.client')
+    @patch('tinytroupe.agent.tiny_person.logger') # Mock logger in TinyPerson module
+    def test_extract_and_store_semantic_insight_llm_error(self, mock_logger, mock_openai_client):
+        # 3. Error handling
+        mock_llm_instance = MagicMock()
+        mock_llm_instance.send_message.side_effect = Exception("LLM API Error")
+        mock_openai_client.return_value = mock_llm_instance
+
+        self.agent.semantic_memory.store = MagicMock()
+
+        episodic_entry = {'type': 'ERROR_EVENT', 'content': 'Error test', 'simulation_timestamp': '2023-01-01T14:00:00Z'}
+
+        self.agent._extract_and_store_semantic_insight(episodic_entry)
+
+        self.agent.semantic_memory.store.assert_not_called()
+        mock_logger.error.assert_called_once()
+        # Check if the error message contains the exception
+        args, kwargs = mock_logger.error.call_args
+        self.assertIn(f"[{self.agent.name}] Error in _extract_and_store_semantic_insight: LLM API Error", args[0])
+
+
+if __name__ == '__main__':
+    # This allows running the tests with `python test_tinyperson.py`
+    # For pytest, it will discover tests automatically.
+    unittest.main()

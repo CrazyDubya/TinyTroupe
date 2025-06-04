@@ -9,6 +9,7 @@ from tinytroupe.control import transactional, current_simulation
 import os
 import json
 import copy
+import datetime # Added for timestamping semantic extraction
 import textwrap  # to dedent strings
 import chevron  # to parse Mustache templates
 from typing import Any
@@ -832,13 +833,46 @@ class TinyPerson(JsonSerializableRegistry):
     # Memory management
     ###########################################################
     def store_in_memory(self, value: Any) -> list:
-        # TODO find another smarter way to abstract episodic information into semantic memory
-        # self.semantic_memory.store(value)
-
         self.episodic_memory.store(value)
+        self._extract_and_store_semantic_insight(value)
+
+    def _extract_and_store_semantic_insight(self, episodic_entry: dict):
+        try:
+            entry_summary = f"Event Type: {episodic_entry.get('type')}, Content: {episodic_entry.get('content')}"
+            if episodic_entry.get('simulation_timestamp'):
+                entry_summary += f", Timestamp: {episodic_entry.get('simulation_timestamp')}"
+
+            prompt_messages = [
+                {"role": "system", "content": "You are an AI assistant that extracts key insights or facts from event descriptions. The insight should be a concise statement. If no clear, distinct fact or insight can be extracted, output the exact string 'None'."},
+                {"role": "user", "content": f"From the following event experienced by an agent: {entry_summary}. Extracted Insight:"}
+            ]
+
+            llm_response = openai_utils.client().send_message(prompt_messages, temperature=0.0, max_tokens=60)
+            insight_text = llm_response.get('content', "").strip()
+
+            if insight_text and insight_text.lower() != 'none' and insight_text != "":
+                logger.debug(f"[{self.name}] Extracted semantic insight: '{insight_text}' from event: {entry_summary}")
+
+                semantic_payload = {
+                    'type': 'semantic_insight',
+                    'simulation_timestamp': datetime.datetime.now().isoformat(),
+                    'content': insight_text,
+                    'source_event_type': episodic_entry.get('type'),
+                    'source_event_timestamp': episodic_entry.get('simulation_timestamp')
+                }
+                self.semantic_memory.store(semantic_payload)
+            else:
+                logger.debug(f"[{self.name}] No distinct semantic insight extracted from event: {entry_summary}")
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Error in _extract_and_store_semantic_insight: {e}", exc_info=True)
 
     def optimize_memory(self):
-        pass #TODO
+        # TODO: This method is intended to house more sophisticated memory optimization strategies,
+        # including summarization/condensation of episodic memory and optimization of semantic memory.
+        # Currently, direct modification of EpisodicMemory class for condensation is facing tooling issues.
+        logger.info(f"[{self.name}] optimize_memory() called. Future optimization logic to be implemented here.")
+        pass
 
     def retrieve_memories(self, first_n: int, last_n: int, include_omission_info:bool=True, max_content_length:int=None) -> list:
         episodes = self.episodic_memory.retrieve(first_n=first_n, last_n=last_n, include_omission_info=include_omission_info)
@@ -1373,4 +1407,4 @@ class TinyPerson(JsonSerializableRegistry):
         """
         Clears the global list of agents.
         """
-        TinyPerson.all_agents = {}        
+        TinyPerson.all_agents = {}
