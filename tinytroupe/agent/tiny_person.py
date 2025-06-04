@@ -26,6 +26,7 @@ class TinyPerson(JsonSerializableRegistry):
     # The maximum number of actions that an agent is allowed to perform before DONE.
     # This prevents the agent from acting without ever stopping.
     MAX_ACTIONS_BEFORE_DONE = 15
+    REFLECTION_TRIGGER_ACTION_COUNT = 5 # Number of actions in a single 'act' call to trigger reflection
 
     PP_TEXT_WIDTH = 100
 
@@ -505,6 +506,19 @@ class TinyPerson(JsonSerializableRegistry):
                 aux_pre_act()
                 aux_act_once()
 
+            # Determine if reflection should be triggered
+            should_reflect = False
+            if contents: # Check if any actions were performed
+                if contents[-1]["action"]["type"] == "DONE":
+                    should_reflect = True
+                    logger.info(f"[{self.name}] Triggering reflection because agent is DONE with current actions.")
+                elif len(contents) >= TinyPerson.REFLECTION_TRIGGER_ACTION_COUNT:
+                    should_reflect = True
+                    logger.info(f"[{self.name}] Triggering reflection after {len(contents)} actions in this turn.")
+
+            if should_reflect:
+                self.reflect_and_synthesize_knowledge()
+
         if return_actions:
             return contents
 
@@ -822,18 +836,73 @@ class TinyPerson(JsonSerializableRegistry):
             self._mental_state["emotions"] = emotions
         
         # update relevant memories for the current situation
-        current_memory_context = self.retrieve_relevant_memories_for_current_context()
-        self._mental_state["memory_context"] = current_memory_context
+        # Create the target string for relevance (reusing logic from retrieve_relevant_memories_for_current_context)
+        context_str = str(self._mental_state["context"])
+        goals_str = str(self._mental_state["goals"])
+        attention_str = str(self._mental_state["attention"])
+        emotions_str = str(self._mental_state["emotions"])
+        # Use a smaller number of recent memories for this specific context string to avoid excessive length
+        recent_episodic_for_target = "\n".join([f"  - {json.dumps(m.get('content'))}" for m in self.retrieve_memories(first_n=0, last_n=5, max_content_length=100, include_omission_info=False)])
+
+        relevance_target_for_episodic = f"""
+        Current Context: {context_str}
+        Current Goals: {goals_str}
+        Current Attention: {attention_str}
+        Current Emotions: {emotions_str}
+        Recent Activities:
+        {recent_episodic_for_target}
+        """
+
+        relevant_episodic_memories = self.retrieve_relevant_episodic_memories(relevance_target_for_episodic, top_k=3) # Retrieve, for example, top 3
+
+        # Combine relevant semantic and episodic memories for the mental state
+        combined_memory_context = []
+        if relevant_episodic_memories:
+            combined_memory_context.append("Relevant past experiences (episodic):")
+            for mem in relevant_episodic_memories:
+                timestamp = mem.get('simulation_timestamp', 'unknown time')
+                content = mem.get('content', {})
+                if isinstance(content, dict): # content can be a dict for actions/stimuli
+                    # Safely access nested content based on 'type'
+                    if mem.get('type') == 'action':
+                        actual_content = content.get('content', str(content))
+                    elif mem.get('type') == 'stimulus':
+                        # Stimuli content can be a list; take the first one's content
+                        stimuli_list = content.get('stimuli', [])
+                        if stimuli_list and isinstance(stimuli_list, list) and len(stimuli_list) > 0:
+                            actual_content = stimuli_list[0].get('content', str(stimuli_list[0]))
+                        else: # Fallback for unexpected structure
+                            actual_content = str(content)
+                    else: # Fallback for unknown type
+                        actual_content = str(content)
+                else: # if content is already a string
+                    actual_content = str(content)
+
+                # Ensure actual_content is a string
+                if not isinstance(actual_content, str):
+                    actual_content = json.dumps(actual_content) # Serialize if it's still not a string (e.g. a list or dict)
+
+                combined_memory_context.append(f"- At {timestamp}: {actual_content[:150]}") # Truncate for brevity
+            combined_memory_context.append("\n") # Separator
+
+        # Append existing relevant semantic memories
+        retrieved_semantic_memories = self.retrieve_relevant_memories_for_current_context() # Call it again
+        if retrieved_semantic_memories:
+            combined_memory_context.append("Relevant general knowledge (semantic):")
+            # retrieved_semantic_memories is a list of strings, so extend is appropriate
+            combined_memory_context.extend(retrieved_semantic_memories)
+
+        self._mental_state["memory_context"] = "\n".join(combined_memory_context)
 
         self.reset_prompt()
-        
 
     ###########################################################
     # Memory management
     ###########################################################
     def store_in_memory(self, value: Any) -> list:
-        # TODO find another smarter way to abstract episodic information into semantic memory
-        # self.semantic_memory.store(value)
+        # TODO: Episodic info is abstracted into semantic memory via the
+        #       reflect_and_synthesize_knowledge() method, called periodically in act().
+        # self.semantic_memory.store(value) # Ensure this direct storage is intentionally disabled.
 
         self.episodic_memory.store(value)
 
@@ -862,13 +931,19 @@ class TinyPerson(JsonSerializableRegistry):
 
         return relevant
 
+    def retrieve_relevant_episodic_memories(self, relevance_target: str, top_k=5) -> list:
+        """Retrieves relevant episodic memories based on a target string."""
+        if hasattr(self, 'episodic_memory') and hasattr(self.episodic_memory, 'retrieve_relevant'):
+            return self.episodic_memory.retrieve_relevant(relevance_target, top_k=top_k)
+        return []
+
     def retrieve_relevant_memories_for_current_context(self, top_k=7) -> list:
         # current context is composed of th recent memories, plus context, goals, attention, and emotions
         context = self._mental_state["context"]
         goals = self._mental_state["goals"]
         attention = self._mental_state["attention"]
         emotions = self._mental_state["emotions"]
-        recent_memories = "\n".join([f"  - {m['content']}"  for m in self.retrieve_memories(first_n=0, last_n=10, max_content_length=100)])
+        recent_memories = "\n".join([f"  - {json.dumps(m.get('content'))}" for m in self.retrieve_memories(first_n=0, last_n=10, max_content_length=100, include_omission_info=False)])
 
         # put everything together in a nice markdown string to fetch relevant memories
         target = f"""
@@ -884,6 +959,116 @@ class TinyPerson(JsonSerializableRegistry):
 
         return self.retrieve_relevant_memories(target, top_k=top_k)
 
+    def reflect_and_synthesize_knowledge(self, num_episodic_memories_to_reflect_on: int = 20):
+        """
+        Reflects on recent episodic memories to extract key insights and store them in semantic memory.
+        """
+        if not hasattr(self, 'episodic_memory') or not hasattr(self, 'semantic_memory'):
+            logger.warning(f"[{self.name}] Missing episodic or semantic memory, skipping reflection.")
+            return
+
+        recent_episodes = self.episodic_memory.retrieve_last(n=num_episodic_memories_to_reflect_on, include_omission_info=False)
+
+        if not recent_episodes:
+            logger.info(f"[{self.name}] No recent episodic memories to reflect upon.")
+            return
+
+        # Format memories for the LLM prompt
+        formatted_episodes_for_prompt = []
+        for i, mem in enumerate(recent_episodes):
+            timestamp = mem.get('simulation_timestamp', 'unknown time')
+            role = mem.get('role', 'unknown_role')
+            mem_content = mem.get('content', {})
+
+            # Extract primary content from action or stimulus
+            actual_text_content = ""
+            if mem.get('type') == 'action' and isinstance(mem_content, dict):
+                action_details = mem_content.get('action', {})
+                actual_text_content = f"Action: {action_details.get('type')}, Content: {action_details.get('content', '')}"
+            elif mem.get('type') == 'stimulus' and isinstance(mem_content, dict):
+                stimulus_details = mem_content.get('stimuli', [{}])[0] # Taking the first stimulus
+                actual_text_content = f"Stimulus: {stimulus_details.get('type')}, Content: {stimulus_details.get('content', '')}, Source: {stimulus_details.get('source', '')}"
+            elif isinstance(mem_content, str): # Fallback for simpler content
+                actual_text_content = mem_content
+            else: # Fallback for other complex content
+                actual_text_content = json.dumps(mem_content)
+
+            formatted_episodes_for_prompt.append(f"Memory {i+1} (Timestamp: {timestamp}, Role: {role}):\n{actual_text_content}\n---")
+
+        episodes_string = "\n".join(formatted_episodes_for_prompt)
+
+        # Define the system prompt for the LLM
+        reflection_system_prompt = textwrap.dedent("""
+        You are a reflective agent. Your task is to analyze a sequence of recent experiences (episodic memories) provided by an agent.
+        Identify key insights, patterns, important facts learned, or general conclusions that can be drawn from these experiences.
+        These synthesized insights will be stored as semantic knowledge.
+        Focus on extracting information that is novel, significant, or contributes to a better understanding of the agent's world, tasks, or interactions.
+        Avoid trivial observations.
+        Respond with a JSON list of strings, where each string is a concise piece of synthesized knowledge. For example:
+        ["Finding X often leads to Y.", "User Z prefers options that are clearly explained.", "The system requires authentication before accessing sensitive data."]
+        If no significant insights can be derived, return an empty list [].
+        """)
+
+        reflection_user_prompt = f"Here are my recent experiences:\n\n{episodes_string}\n\nPlease provide your synthesized knowledge based on these experiences, in the specified JSON format."
+
+        messages_for_llm = [
+            {"role": "system", "content": reflection_system_prompt},
+            {"role": "user", "content": reflection_user_prompt}
+        ]
+
+        logger.info(f"[{self.name}] Requesting LLM to synthesize knowledge from {len(recent_episodes)} episodes.")
+
+        synthesized_knowledge_list = []
+        try:
+            # Assuming openai_utils.client().send_message can handle this structure
+            # For response_model, if list[str] is not directly supported as a Pydantic model,
+            # we would expect a raw string and parse it using utils.extract_json.
+            # Let's assume 'send_message' returns a dict like {'role': 'assistant', 'content': '["insight1", ... ]'}
+            # or if response_model=list[str] works, it might directly return the list.
+            llm_response_raw = openai_utils.client().send_message(messages_for_llm) # Potentially add response_model=list[str] if supported
+
+            if isinstance(llm_response_raw, dict) and 'content' in llm_response_raw:
+                # This case assumes the LLM returns a JSON string within the 'content' field.
+                extracted_json = utils.extract_json(llm_response_raw['content'])
+                if isinstance(extracted_json, list):
+                    synthesized_knowledge_list = [item for item in extracted_json if isinstance(item, str)]
+                else:
+                    logger.warning(f"[{self.name}] LLM reflection response JSON content was not a list: {extracted_json}")
+            # This case would be if send_message with response_model=list[str] (or similar) directly returns a list.
+            # elif isinstance(llm_response_raw, list):
+            #    synthesized_knowledge_list = [item for item in llm_response_raw if isinstance(item, str)]
+            else:
+                # Fallback or if the response_model=list[str] was intended to be used with a Pydantic model:
+                # If the direct output of send_message (without a specific response_model for list[str])
+                # is expected to be the list itself due to how `openai_utils` might be set up.
+                # This part is speculative based on `response_model=list[str]` in the prompt.
+                # For now, we'll rely on the dict structure as it's more common with current `send_message` usage.
+                logger.warning(f"[{self.name}] Unexpected LLM reflection response format: {llm_response_raw}")
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Error during LLM call for knowledge synthesis: {e}")
+            # synthesized_knowledge_list remains []
+
+        if not synthesized_knowledge_list:
+            logger.info(f"[{self.name}] No new knowledge synthesized from reflection.")
+            return
+
+        logger.info(f"[{self.name}] Synthesized {len(synthesized_knowledge_list)} pieces of knowledge.")
+        for knowledge_statement in synthesized_knowledge_list:
+            if not isinstance(knowledge_statement, str) or not knowledge_statement.strip():
+                logger.warning(f"[{self.name}] Skipping empty or invalid knowledge statement: {knowledge_statement}")
+                continue
+
+            new_knowledge_item = {
+                'type': 'synthesized_knowledge',
+                'content': knowledge_statement,
+                'source_reflection_timestamp': self.iso_datetime(), # Timestamp of when reflection occurred
+                'reflected_episodes_count': len(recent_episodes)
+            }
+            # Assuming semantic_memory.store() can handle a dict and will process it into a Document or suitable format.
+            self.semantic_memory.store(new_knowledge_item)
+
+        logger.info(f"[{self.name}] Finished storing synthesized knowledge.")
 
     ###########################################################
     # Inspection conveniences
