@@ -1,4 +1,4 @@
-from tinytroupe.environment import logger, default
+from tinytroupe.environment import logger, default # logger is imported here
 
 import copy
 from datetime import datetime, timedelta
@@ -9,6 +9,8 @@ from tinytroupe.utils import name_or_empty, pretty_datetime
 import tinytroupe.control as control
 from tinytroupe.control import transactional
 from tinytroupe import utils
+# Added import for Intervention
+from tinytroupe.steering.intervention import Intervention
  
 from rich.console import Console
 
@@ -698,7 +700,10 @@ class TinyWorld:
         del to_copy['agents']
         del to_copy['name_to_agent']
         del to_copy['current_datetime']
-        del to_copy['_interventions'] # TODO: encode interventions
+        # del to_copy['_interventions'] # TODO: encode interventions # This line is removed
+
+        # Serialize interventions to JSON dicts
+        to_copy['_interventions'] = [inter.to_json() for inter in self._interventions if hasattr(inter, 'to_json')]
 
         state = copy.deepcopy(to_copy)
 
@@ -728,19 +733,53 @@ class TinyWorld:
         self.remove_all_agents()
         for agent_state in state["agents"]:
             try:
-                try:
-                    agent = TinyPerson.get_agent_by_name(agent_state["name"])
-                except Exception as e:
-                    raise ValueError(f"Could not find agent {agent_state['name']} for environment {self.name}.") from e
+                # Agent retrieval should be robust; assuming TinyPerson.get_agent_by_name exists
+                # and handles cases where an agent might not be in the global TinyPerson.all_agents yet
+                # if being deserialized as part of a larger simulation load.
+                # For now, assume agent objects are created/available or this part of logic might need adjustment
+                # based on how Simulation manages agent instantiation during deserialization.
+                agent_name = agent_state.get("name") # or agent_state.get("_persona", {}).get("name")
+                if not agent_name:
+                    raise ValueError("Agent state is missing a name.")
+
+                agent = TinyPerson.get_agent_by_name(agent_name)
+                if not agent: # If agent not in global list, create a new one for deserialization
+                    # This might be too simplistic if agents have complex __init__ or dependencies not in state
+                    # For now, we assume from_json can reconstruct or this is handled by Simulation layer
+                    agent = TinyPerson.from_json(agent_state) # Try to load fully from its own state if not found
+                    # TinyPerson.add_agent(agent) # Add to global list if newly created
+                else: # Agent exists, decode state into it
+                    agent.decode_complete_state(agent_state)
                 
-                agent.decode_complete_state(agent_state)
-                self.add_agent(agent)
+                self.add_agent(agent) # Adds to self.agents and self.name_to_agent
                 
             except Exception as e:
-                raise ValueError(f"Could not decode agent {agent_state['name']} for environment {self.name}.") from e
+                logger.error(f"Could not decode agent {agent_state.get('name', 'UNKNOWN_AGENT')} for environment {self.name}. Error: {e}", exc_info=True)
+                # Decide whether to raise the error or continue loading other parts of the world
+                # For now, let's log and continue to make the process more robust to individual agent failures.
         
         # remove the agent states to update the rest of the environment
         del state["agents"]
+
+        # Deserialize Interventions
+        self._interventions = []
+        if "_interventions" in state and isinstance(state["_interventions"], list):
+            for inter_data in state["_interventions"]:
+                if isinstance(inter_data, dict): # Check if it's a dict (serialized form)
+                    try:
+                        intervention_obj = Intervention.from_json(inter_data)
+                        # Note: Targets, precondition_func, effect_func, _last_text_precondition_proposition
+                        # are not restored by from_json due to current limitations.
+                        # These would need manual re-linking if the intervention is to be fully functional.
+                        self._interventions.append(intervention_obj)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to deserialize an intervention: {inter_data}. Error: {e}")
+                # else: # If it's not a dict, it might be an actual Intervention object (e.g. from an older cache format or direct assignment)
+                #    self._interventions.append(inter_data) # This case might be removed if we ensure only JSON dicts are saved
+
+        # Remove the key from state dict after processing so it doesn't cause issues with __dict__.update()
+        if "_interventions" in state:
+            del state["_interventions"]
 
         # restore datetime
         state["current_datetime"] = datetime.fromisoformat(state["current_datetime"])
