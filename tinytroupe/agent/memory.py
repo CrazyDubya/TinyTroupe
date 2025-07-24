@@ -291,7 +291,7 @@ class SemanticMemory(TinyMemory):
                 # from tinytroupe.agent import logger # Add this import at the top of the file if not present
                 # logger.warning(f"Preprocessing returned None for value: {value}. Skipping storage in semantic memory.")
                 # For now, let's print, assuming logger might not be configured here.
-                print(f"Warning: Preprocessing returned None for value: {value}. Skipping storage in semantic memory.")
+                logger.warning(f"Preprocessing returned None for value: {value}. Skipping storage in semantic memory.")
                 return
 
         # If engram_text was set by preprocessing a dict, or if value was a string.
