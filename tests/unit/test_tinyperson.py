@@ -7,10 +7,9 @@ sys.path.insert(0, '../../tinytroupe/') # ensures that the package is imported f
 sys.path.insert(0, '../../') # ensures that the package is imported from the parent directory, not the Python installation
 sys.path.insert(0, '..') # ensures that the package is imported from the parent directory, not the Python installation
 
-#sys.path.append('../../tinytroupe/')
-#sys.path.append('../../')
-#sys.path.append('..')
 
+from unittest.mock import MagicMock, patch
+from tinytroupe.agent.tiny_person import TinyPerson
 from tinytroupe.examples import create_oscar_the_architect, create_oscar_the_architect_2, create_lisa_the_data_scientist, create_lisa_the_data_scientist_2
 
 from testing_utils import *
@@ -26,6 +25,14 @@ def test_act(setup):
         assert len(actions) >= 1, f"{agent.name} should have at least one action to perform (even if it is just DONE)."
         assert contains_action_type(actions, "TALK"), f"{agent.name} should have at least one TALK action to perform, since we asked him to do so."
         assert terminates_with_action_type(actions, "DONE"), f"{agent.name} should always terminate with a DONE action."
+        
+        # Semantic verification: check that the agent actually talks about their life
+        for action in actions:
+            if action["action"]["type"] == "TALK":
+                talk_content = action["action"]["content"]
+                assert proposition_holds(f"The following text is someone talking about their personal life, background, or experiences: '{talk_content}'"), \
+                    f"Agent should be talking about their life but said: {talk_content}"
+                break
 
 def test_listen(setup):
     # test that the agent listens to a speech stimulus and updates its current messages
@@ -85,6 +92,14 @@ def test_see(setup):
         assert len(actions) >= 1, f"{agent.name} should have at least one action to perform."
         assert contains_action_type(actions, "THINK"), f"{agent.name} should have at least one THINK action to perform, since they saw something interesting."
         assert contains_action_content(actions, "sunset"), f"{agent.name} should mention the sunset in the THINK action, since they saw it."
+        
+        # Semantic verification: check that the agent's thoughts relate to what they saw
+        for action in actions:
+            if action["action"]["type"] == "THINK":
+                think_content = action["action"]["content"]
+                assert proposition_holds(f"The following text is someone thinking about or reacting to seeing a beautiful sunset over the ocean: '{think_content}'"), \
+                    f"Agent should be thinking about the sunset but thought: {think_content}"
+                break
 
 def test_think(setup):
     # Test that thinking about something works as expected
@@ -94,6 +109,14 @@ def test_think(setup):
         assert len(actions) >= 1, f"{agent.name} should have at least one action to perform."
         assert contains_action_type(actions, "TALK"), f"{agent.name} should have at least one TALK action to perform, since they are eager to talk."
         assert contains_action_content(actions, "life"), f"{agent.name} should mention life in the TALK action, since they thought about it."
+        
+        # Semantic verification: check that the agent expresses enthusiasm about life
+        for action in actions:
+            if action["action"]["type"] == "TALK":
+                talk_content = action["action"]["content"]
+                assert proposition_holds(f"The following text expresses enthusiasm or positive feelings about life: '{talk_content}'"), \
+                    f"Agent should be expressing enthusiasm about life but said: {talk_content}"
+                break
 
 def test_internalize_goal(setup):
     # Test that internalizing a goal works as expected
@@ -103,6 +126,14 @@ def test_internalize_goal(setup):
         assert len(actions) >= 1, f"{agent.name} should have at least one action to perform."
         assert contains_action_type(actions, "THINK"), f"{agent.name} should have at least one THINK action to perform, since they internalized a goal."
         assert contains_action_content(actions, "cats"), f"{agent.name} should mention cats in the THINK action, since they internalized a goal about them."
+        
+        # Semantic verification: check that the agent's thoughts relate to cats or poetry
+        for action in actions:
+            if action["action"]["type"] == "THINK":
+                think_content = action["action"]["content"]
+                assert proposition_holds(f"The following text is someone thinking about cats, poetry, or composing a poem about cats: '{think_content}'"), \
+                    f"Agent should be thinking about cats or poetry but thought: {think_content}"
+                break
 
 
 def test_move_to(setup):
@@ -142,5 +173,107 @@ def test_save_specification(setup):
 def test_programmatic_definitions(setup):
     for agent in [create_oscar_the_architect_2(), create_lisa_the_data_scientist_2()]:
         agent.listen_and_act("Tell me a bit about your life.")
+
+
+def test_loop_detection_stops_after_threshold(setup, caplog):
+    """Tests that the agent stops acting when the loop detection threshold is reached."""
+    agent = TinyPerson(name="LoopTestAgent")
+    # Override the default threshold for this test if needed, or use the class default
+    original_threshold = TinyPerson.LOOP_DETECTION_THRESHOLD
+    TinyPerson.LOOP_DETECTION_THRESHOLD = 3 # Use a smaller threshold for easier testing
+
+    # Define the action that will be repeated
+    looping_action_content = {"type": "TALK", "content": "I am stuck in a loop."}
+    mock_response = {
+        "role": "assistant",
+        "content": {
+            "cognitive_state": {
+                "goals": ["Test loop detection"],
+                "attention": "Looping action",
+                "emotions": "Neutral"
+            },
+            "action": looping_action_content
+        }
+    }
+
+    # Mock _produce_message to return the same action
+    agent._produce_message = MagicMock(return_value=(mock_response["role"], mock_response["content"]))
+
+    caplog.set_level(logging.WARNING)
     
+    # Act until done, expecting the loop detection to kick in
+    actions_performed = agent.act(until_done=True, return_actions=True)
+
+    assert len(actions_performed) == TinyPerson.LOOP_DETECTION_THRESHOLD, \
+        f"Agent should perform exactly {TinyPerson.LOOP_DETECTION_THRESHOLD} actions before stopping due to loop."
     
+    # Check that all performed actions are the same as the looping_action_content
+    for action_content in actions_performed:
+        assert action_content['action'] == looping_action_content, "All performed actions should be the looping action."
+
+    assert f"Agent {agent.name} is acting in a loop" in caplog.text, \
+        "A warning about acting in a loop should be logged."
+
+    # Restore original threshold
+    TinyPerson.LOOP_DETECTION_THRESHOLD = original_threshold
+
+
+def test_loop_detection_does_not_trigger_below_threshold(setup):
+    """Tests that the agent does not stop if identical actions are below the threshold."""
+    agent = TinyPerson(name="NoLoopTestAgent")
+    original_threshold = TinyPerson.LOOP_DETECTION_THRESHOLD
+    TinyPerson.LOOP_DETECTION_THRESHOLD = 3
+
+    # Define the action that will be repeated
+    action_content = {"type": "THINK", "content": "Thinking..."}
+    done_action_content = {"type": "DONE", "content": ""}
+
+    mock_responses = [
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": action_content}),
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": action_content}),
+        # This is the action that stops the sequence, not a loop
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": done_action_content})
+    ]
+
+    agent._produce_message = MagicMock(side_effect=mock_responses)
+
+    actions_performed = agent.act(until_done=True, return_actions=True)
+
+    # The number of actions should be 2 identical + 1 DONE action
+    assert len(actions_performed) == 3, \
+        "Agent should perform actions as defined by mock_responses (2 identical + DONE)."
+    assert actions_performed[0]['action'] == action_content
+    assert actions_performed[1]['action'] == action_content
+    assert actions_performed[2]['action'] == done_action_content
+
+    # Restore original threshold
+    TinyPerson.LOOP_DETECTION_THRESHOLD = original_threshold
+
+
+def test_loop_detection_with_different_actions(setup, caplog):
+    """Tests that the agent does not stop if actions are different, even if count exceeds threshold."""
+    agent = TinyPerson(name="DifferentActionsAgent")
+    original_threshold = TinyPerson.LOOP_DETECTION_THRESHOLD
+    TinyPerson.LOOP_DETECTION_THRESHOLD = 3
+
+    action1_content = {"type": "TALK", "content": "Hello."}
+    action2_content = {"type": "THINK", "content": "Hmm."}
+    action3_content = {"type": "TALK", "content": "Goodbye."}
+    done_action_content = {"type": "DONE", "content": ""}
+
+    mock_responses = [
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": action1_content}),
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": action2_content}),
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": action3_content}),
+        ("assistant", {"cognitive_state": {"goals": [], "attention": "", "emotions": ""}, "action": done_action_content})
+    ]
+    agent._produce_message = MagicMock(side_effect=mock_responses)
+    caplog.set_level(logging.WARNING)
+    actions_performed = agent.act(until_done=True, return_actions=True)
+
+    assert len(actions_performed) == 4, "Agent should perform all defined different actions plus DONE."
+    assert f"Agent {agent.name} is acting in a loop" not in caplog.text, \
+        "A warning about acting in a loop should NOT be logged if actions are different."
+
+    # Restore original threshold
+    TinyPerson.LOOP_DETECTION_THRESHOLD = original_threshold
