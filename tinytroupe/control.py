@@ -223,9 +223,9 @@ class Simulation:
             # This might happen if args/kwargs contain unpickleable objects.
             # A truly robust solution might require making those objects pickleable or using a custom serializer.
             event_str = str((function_name, args, kwargs)) # args and kwargs are still used here for fallback key
-            print(f"DEBUG: About to log fallback warning for {function_name}") # DEBUG PRINT
+            logger.debug(f"About to log fallback warning for {function_name}") # DEBUG LOG
             logger.warning(f"FALLBACK_CACHE_KEY_USED for {function_name}.") # Simplified warning
-            print(f"DEBUG: Logged fallback warning for {function_name}") # DEBUG PRINT
+            logger.debug(f"Logged fallback warning for {function_name}") # DEBUG LOG
             return hashlib.sha256(event_str.encode('utf-8', 'surrogatepass')).hexdigest()
 
 
