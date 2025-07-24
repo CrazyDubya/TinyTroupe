@@ -1123,7 +1123,7 @@ max_content_length=max_content_length,
 
                 semantic_payload = {
                     'type': 'semantic_insight',
-                    'simulation_timestamp': datetime.datetime.now().isoformat(),
+                    'simulation_timestamp': self.iso_datetime(),
                     'content': insight_text,
                     'source_event_type': episodic_entry.get('type'),
                     'source_event_timestamp': episodic_entry.get('simulation_timestamp')
