@@ -255,13 +255,10 @@ class SemanticMemory(TinyMemory):
                      f"Insight: {value['content']}"
 
         # else: # Anything else here?
-        # Ensure value is a dict before accessing type, otherwise return None or handle error
+        # Ensure value is a dict before accessing type, otherwise raise a TypeError
         elif not isinstance(value, dict):
-            # If value is not a dict, we cannot process its type.
-            # Depending on desired behavior, either return str(value) or None, or log an error.
-            # For now, let's assume it should have been a dict if it reached here with an unhandled type.
-            # Or, if direct string storage is allowed, this preprocessing step might not be called for them.
-            return None # Or str(value) if strings should be stored as is.
+            # If value is not a dict, raise an error to enforce the API contract.
+            raise TypeError(f"Expected a dictionary for preprocessing, but got {type(value).__name__}: {value}")
 
         return engram
 
