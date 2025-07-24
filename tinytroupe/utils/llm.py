@@ -913,7 +913,8 @@ def extract_json(text: str) -> Union[dict, list, None]:
     try:
         return json.loads(cleaned_text, strict=False)
     except json.JSONDecodeError as e:
-        logger.error(f"All JSON extraction strategies failed for input: {original_text[:500]}... Error: {e}")
+        sanitized_input = re.sub(r'[^\w\s]', '_', original_text[:500])  # Replace non-alphanumeric characters with '_'
+        logger.error(f"All JSON extraction strategies failed for sanitized input: {sanitized_input}... Error: {e}")
         return None
 
 
