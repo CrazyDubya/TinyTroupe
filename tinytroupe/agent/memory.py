@@ -9,6 +9,9 @@ import tinytroupe.utils as utils
 from llama_index.core import Document
 from typing import Any
 import copy
+
+import json
+
 from typing import Union
 
 #######################################################################################################################
@@ -238,31 +241,47 @@ class EpisodicMemory(TinyMemory):
 
         # the definitive memory that records all episodic events
         self.memory = []
-        
-        # the current episode buffer, which is used to store messages during an episode
-        self.episodic_buffer = []
+        self.semantic_connector = BaseSemanticGroundingConnector(name="Episodic Memory Index")
+        self.memory_id_map = {}
+
 
 
     def commit_episode(self):
         """
         Ends the current episode, storing the episodic buffer in memory.
         """
-        self.memory.extend(self.episodic_buffer)
-        self.episodic_buffer = []
-    
-    def get_current_episode(self, item_types:list=None) -> list:
-        """
-        Returns the current episode buffer, which is used to store messages during an episode.
+# From enhancement-E001-memory-management
+memory_id = str(uuid.uuid4())
+self.memory.append(value)
+memory_idx = len(self.memory) - 1
+self.memory_id_map[memory_id] = memory_idx
 
-        Args:
-            item_types (list, optional): If provided, only retrieve memories of these types. Defaults to None, which retrieves all types.
+doc_text = json.dumps(value)
+if isinstance(value, dict):
+    original_timestamp = value.get('simulation_timestamp')
+else:
+    original_timestamp = None  # Default value if 'value' is not a dictionary
+document = Document(text=doc_text, metadata={'memory_id': memory_id, 'original_timestamp': original_timestamp})
+self.semantic_connector.add_document(document)
 
-        Returns:
-            list: The current episode buffer.
-        """
-        result = copy.copy(self.episodic_buffer)
-        result = self.filter_by_item_types(result, item_types) if item_types is not None else result
-        return result
+# From main
+self.memory.extend(self.episodic_buffer)
+self.episodic_buffer = []
+
+def get_current_episode(self, item_types: list = None) -> list:
+    """
+    Returns the current episode buffer, which is used to store messages during an episode.
+
+    Args:
+        item_types (list, optional): If provided, only retrieve memories of these types. Defaults to None, which retrieves all types.
+
+    Returns:
+        list: The current episode buffer.
+    """
+    result = copy.copy(self.episodic_buffer)
+    result = self.filter_by_item_types(result, item_types) if item_types is not None else result
+    return result
+
 
     def count(self) -> int:
         """
@@ -379,7 +398,17 @@ class EpisodicMemory(TinyMemory):
         """
         Retrieves top-k values from memory that are most relevant to a given target.
         """
-        raise NotImplementedError("Subclasses must implement this method.")
+        retrieved_nodes = self.semantic_connector.retrieve_relevant(relevance_target, top_k=top_k)
+        relevant_memories = []
+        for node_info in retrieved_nodes:
+            metadata = node_info.get('metadata', {})
+            memory_id = metadata.get('memory_id')
+            if memory_id:
+                memory_idx = self.memory_id_map.get(memory_id)
+                # Check if memory_idx is not None and is a valid index
+                if memory_idx is not None and 0 <= memory_idx < len(self.memory):
+                    relevant_memories.append(self.memory[memory_idx])
+        return relevant_memories
 
     def retrieve_first(self, n: int, include_omission_info:bool=True, item_type:str=None) -> list:
         """
@@ -490,19 +519,63 @@ class SemanticMemory(TinyMemory):
                     "type": "information",  # Default to 'information' if type is not specified
                     "simulation_timestamp": None}
 
-        logger.debug(f"Engram created for storage: {engram}")
+        elif value['type'] == 'synthesized_knowledge':
+            engram = f"# Synthesized Knowledge (Reflected on: {value.get('source_reflection_timestamp', 'N/A')}, From: {value.get('reflected_episodes_count', 'N/A')} episodes)\n" +\
+                     f"Insight: {value['content']}"
+
+        # else: # Anything else here?
+        # Ensure value is a dict before accessing type, otherwise raise a TypeError
+        elif not isinstance(value, dict):
+            # If value is not a dict, raise an error to enforce the API contract.
+            raise TypeError(f"Expected a dictionary for preprocessing, but got {type(value).__name__}: {value}")
 
         return engram
 
-    def _store(self, value: Any) -> None:
-        logger.debug(f"Preparing engram for semantic memory storage, input value: {value}")
-        self.memories.append(value)  # Store the value in the local memory list
+    # Override the base class store method to ensure _store receives the original dictionary
+    def store(self, value: dict) -> None:
+        """
+        Stores a value in semantic memory.
+        The value is expected to be a dictionary, which will be preprocessed.
+        """
+        if not isinstance(value, dict):
+            # Optional: Log a warning or raise an error if value is not a dict,
+            # as SemanticMemory expects dicts for preprocessing and metadata.
+            # For now, let it pass to _store, which has some handling for strings.
+            print(f"Warning: SemanticMemory.store called with non-dict value: {value}") # Or use logger
+        self._store(value) # Pass the original dict to _store
 
-        # then econduct the value to a Document and store it in the semantic grounding connector
-        # This is the actual storage in the semantic memory to allow semantic retrieval
-        engram_doc = self._build_document_from(value)
-        logger.debug(f"Storing engram in semantic memory: {engram_doc}")
-        self.semantic_grounding_connector.add_document(engram_doc)
+    def _store(self, value: Any) -> None: # value here is the original dict
+        engram_text = self._preprocess_value_for_storage(value) # value is the dict here
+
+        if engram_text is None:
+            # If value is a string, it might have been passed here directly if store() was called with a string.
+            # The main store() method expects a dict, so this path implies an issue or direct _store call.
+            if isinstance(value, str): # Allow storing raw strings if they bypass preprocessing
+                engram_text = value
+                metadata = {'type': 'raw_string'}
+            else:
+                # from tinytroupe.agent import logger # Add this import at the top of the file if not present
+                # logger.warning(f"Preprocessing returned None for value: {value}. Skipping storage in semantic memory.")
+                # For now, let's print, assuming logger might not be configured here.
+                logger.warning(f"Preprocessing returned None for value: {value}. Skipping storage in semantic memory.")
+                return
+
+        # If engram_text was set by preprocessing a dict, or if value was a string.
+        metadata = {}
+        if isinstance(value, dict): # Only try to get metadata if value is a dict
+            metadata = {
+                'original_timestamp': value.get('simulation_timestamp') or value.get('source_reflection_timestamp'),
+                'type': value.get('type')
+            }
+
+        # Ensure engram_text is not None before building document
+        if engram_text:
+             engram_doc = self._build_document_from(engram_text, metadata=metadata)
+             self.semantic_grounding_connector.add_document(engram_doc)
+        else:
+             # print(f"Warning: Engram text is None for value: {value}. Document not built or stored.") # Redundant due to above check
+             pass # Already handled
+
     
     def retrieve_relevant(self, relevance_target:str, top_k=20) -> list:
         """
@@ -543,21 +616,46 @@ class SemanticMemory(TinyMemory):
     # Auxiliary compatibility methods
     #####################################
 
-    def _build_document_from(self, memory) -> Document:
-        # TODO: add any metadata as well?
-        
-        # make sure we are dealing with a dictionary
-        if not isinstance(memory, dict):
-            memory = {"content": memory, "type": "information"}
+def _build_document_from(self, memory_text: str, metadata: dict = None) -> Document:
+    """
+    Wraps a memory text into a Document with optional metadata.
+    """
+    if metadata is None:
+        metadata = {}
+    return Document(text=str(memory_text), metadata=metadata)
 
-        # ensures double quotes are used for JSON serialization, and maybe other formatting details
-        memory_txt = json.dumps(memory, ensure_ascii=False)
-        logger.debug(f"Building document from memory: {memory_txt}")
-        
-        return Document(text=memory_txt)
+def _build_documents_from(self, memories: list) -> list:
+    """
+    Builds Document objects from a list of memory items, extracting relevant metadata when available.
 
-    def _build_documents_from(self, memories: list) -> list:
-        return [self._build_document_from(memory) for memory in memories]
+    Handles dicts with fields like 'content', 'simulation_timestamp', and 'type'.
+    Applies preprocessing for certain memory types. Falls back gracefully for strings and unknown formats.
+    """
+    docs = []
+    for mem_item in memories:
+        if isinstance(mem_item, dict):
+            text_content = mem_item.get('content', str(mem_item))
+            metadata = {
+                'original_timestamp': mem_item.get('simulation_timestamp') or mem_item.get('source_reflection_timestamp'),
+                'type': mem_item.get('type', 'unknown_init_type')
+            }
+
+            # Special preprocessing for known memory types
+            if mem_item.get('type') in ['action', 'stimulus', 'synthesized_knowledge']:
+                processed_text = self._preprocess_value_for_storage(mem_item)
+                if processed_text:  # Only replace if valid
+                    text_content = processed_text
+
+            docs.append(self._build_document_from(text_content, metadata=metadata))
+
+        elif isinstance(mem_item, str):
+            # Handle already processed strings
+            docs.append(self._build_document_from(mem_item, metadata={'type': 'unknown_init_str'}))
+
+        else:
+            # Fallback for unknown types
+            docs.append(self._build_document_from(str(mem_item), metadata={'type': 'unknown_init_fallback'}))
+    return docs
 
 
 ###################################################################################################
@@ -744,4 +842,3 @@ class ReflectionConsolidator(MemoryProcessor):
           - In general, the reflection process aims to reduce the number of memories while preserving the most relevant information and removing redundant or less relevant information.
         """
         pass # TODO
-
