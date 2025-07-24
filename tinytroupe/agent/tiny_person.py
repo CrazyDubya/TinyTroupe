@@ -9,6 +9,7 @@ from tinytroupe import config_manager
 import os
 import json
 import copy
+import datetime # Added for timestamping semantic extraction
 import textwrap  # to dedent strings
 import chevron  # to parse Mustache templates
 from typing import Any
@@ -1082,59 +1083,97 @@ max_content_length=max_content_length,
     ###########################################################
     # Memory management
     ###########################################################
-
-        # TODO: Episodic info is abstracted into semantic memory via the
-        #       reflect_and_synthesize_knowledge() method, called periodically in act().
-        # self.semantic_memory.store(value) # Ensure this direct storage is intentionally disabled. DONE?
-
-
+    ###########################################################
+    # Memory management
+    ###########################################################
     def store_in_memory(self, value: Any) -> list:
         self.episodic_memory.store(value)
-        
+        self._extract_and_store_semantic_insight(value)
+
         self._current_episode_event_count += 1
         logger.debug(f"[{self.name}] Current episode event count: {self._current_episode_event_count}.")
 
         if self._current_episode_event_count >= self.MAX_EPISODE_LENGTH:
-            # commit the current episode to memory, if it is long enough
-            logger.warning(f"[{self.name}] Episode length exceeded {self.MAX_EPISODE_LENGTH} events. Committing episode to memory. Please check whether this was expected or not.")
+            logger.warning(f"[{self.name}] Episode length exceeded {self.MAX_EPISODE_LENGTH} events. Committing episode to memory.")
             self.consolidate_episode_memories()
-    
+
+    def _extract_and_store_semantic_insight(self, episodic_entry: dict):
+        try:
+            entry_summary = f"Event Type: {episodic_entry.get('type')}, Content: {episodic_entry.get('content')}"
+            if episodic_entry.get('simulation_timestamp'):
+                entry_summary += f", Timestamp: {episodic_entry.get('simulation_timestamp')}"
+
+            prompt_messages = [
+                {
+                    "role": "system",
+                    "content": "You are an AI assistant that extracts key insights or facts from event descriptions. "
+                               "The insight should be a concise statement. If no clear, distinct fact or insight can be extracted, output the exact string 'None'."
+                },
+                {
+                    "role": "user",
+                    "content": f"From the following event experienced by an agent: {entry_summary}. Extracted Insight:"
+                }
+            ]
+
+            llm_response = openai_utils.client().send_message(prompt_messages, temperature=0.0, max_tokens=60)
+            insight_text = llm_response.get('content', "").strip()
+
+            if insight_text and insight_text.lower() != 'none' and insight_text != "":
+                logger.debug(f"[{self.name}] Extracted semantic insight: '{insight_text}' from event: {entry_summary}")
+
+                semantic_payload = {
+                    'type': 'semantic_insight',
+                    'simulation_timestamp': self.iso_datetime(),
+                    'content': insight_text,
+                    'source_event_type': episodic_entry.get('type'),
+                    'source_event_timestamp': episodic_entry.get('simulation_timestamp')
+                }
+                self.semantic_memory.store(semantic_payload)
+            else:
+                logger.debug(f"[{self.name}] No distinct semantic insight extracted from event: {entry_summary}")
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Error in _extract_and_store_semantic_insight: {e}", exc_info=True)
+
     def consolidate_episode_memories(self):
         """
         Applies all memory consolidation or transformation processes appropriate to the conclusion of one simulation episode.
         """
-        # a minimum length of the episode is required to consolidate it, to avoid excessive fragments in the semantic memory
         if self._current_episode_event_count > self.MIN_EPISODE_LENGTH:
             logger.debug(f"[{self.name}] ***** Consolidating current episode memories into semantic memory *****")
-        
-            # Consolidate latest episodic memories into semantic memory
+
             if config_manager.get("enable_memory_consolidation"):
-                
-                
-                    episodic_consolidator = EpisodicConsolidator()
-                    episode = self.episodic_memory.get_current_episode(item_types=["action", "stimulus"],)
-                    logger.debug(f"[{self.name}] Current episode: {episode}")
-                    consolidated_memories = episodic_consolidator.process(episode, timestamp=self._mental_state["datetime"], context=self._mental_state, persona=self.minibio())["consolidation"]
-                    if consolidated_memories is not None:
-                        logger.info(f"[{self.name}] Consolidating current {len(episode)} episodic events as consolidated semantic memories.")
-                        logger.debug(f"[{self.name}] Consolidated memories: {consolidated_memories}")
-                        self.semantic_memory.store_all(consolidated_memories)
-                    else:
-                        logger.debug(f"[{self.name}] No memories to consolidate from the current episode.")
-                
+                episodic_consolidator = EpisodicConsolidator()
+                episode = self.episodic_memory.get_current_episode(item_types=["action", "stimulus"])
+                logger.debug(f"[{self.name}] Current episode: {episode}")
 
+                consolidated = episodic_consolidator.process(
+                    episode,
+                    timestamp=self._mental_state["datetime"],
+                    context=self._mental_state,
+                    persona=self.minibio()
+                )["consolidation"]
+
+                if consolidated:
+                    logger.info(f"[{self.name}] Consolidating current {len(episode)} episodic events as consolidated semantic memories.")
+                    logger.debug(f"[{self.name}] Consolidated memories: {consolidated}")
+                    self.semantic_memory.store_all(consolidated)
+                else:
+                    logger.debug(f"[{self.name}] No memories to consolidate from the current episode.")
             else:
-                logger.warning(f"[{self.name}] Memory consolidation is disabled. Not consolidating current episode memories into semantic memory.")
+                logger.warning(f"[{self.name}] Memory consolidation is disabled by config.")
 
-            # commit the current episode to episodic memory
             self.episodic_memory.commit_episode()
             self._current_episode_event_count = 0
             logger.debug(f"[{self.name}] Current episode event count reset to 0 after consolidation.")
 
-            # TODO reflections, optimizations, etc.
 
     def optimize_memory(self):
-        pass #TODO
+        # TODO: This method is intended to house more sophisticated memory optimization strategies,
+        # including summarization/condensation of episodic memory and optimization of semantic memory.
+        # Currently, direct modification of EpisodicMemory class for condensation is facing tooling issues.
+        logger.info(f"[{self.name}] optimize_memory() called. Future optimization logic to be implemented here.")
+        pass
 
     def clear_episodic_memory(self, max_prefix_to_clear=None, max_suffix_to_clear=None):
         """

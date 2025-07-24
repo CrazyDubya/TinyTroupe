@@ -1,5 +1,6 @@
 from typing import Union, List
 from tinytroupe.extraction import logger
+# Ensure JsonSerializableRegistry is imported
 from tinytroupe.utils import JsonSerializableRegistry
 from tinytroupe.experimentation import Proposition
 from tinytroupe.environment import TinyWorld
@@ -46,7 +47,16 @@ class InterventionBatch:
         return self.interventions
 
 
-class Intervention:
+
+# TODO under development
+# Class-level comment on serialization limitations:
+# Note: For deserialized instances, `targets`, `precondition_func`, `effect_func`,
+# and `_last_text_precondition_proposition` will not be automatically restored due to
+# complexities in serializing/deserializing functions and full object references.
+# These may need to be re-assigned or re-hydrated manually after deserialization.
+class Intervention(JsonSerializableRegistry):
+    serializable_attributes = ["name", "text_precondition", "first_n", "last_n"]
+
 
     def __init__(self, targets: Union[TinyPerson, TinyWorld, List[TinyPerson], List[TinyWorld]], 
                  first_n:int=DEFAULT_FIRST_N, last_n:int=DEFAULT_LAST_N,
@@ -60,6 +70,9 @@ class Intervention:
             last_n (int): the number of last interactions (most recent) to consider in the context
             name (str): the name of the intervention
         """
+        # TODO: Add a note in __init__ or class docstring about serialization limitations
+        # for targets, precondition_func, effect_func for deserialized instances.
+        # For now, this is covered by the class-level comment.
         
         self.targets = targets
         
@@ -144,14 +157,13 @@ class Intervention:
         """
         Check if the precondition for the intervention is met.
         """
-        #
-        # Textual precondition
-        #
-        if self.text_precondition is not None:
-            self._last_text_precondition_proposition = Proposition(claim=self.text_precondition, target=self.targets, first_n=self.first_n, last_n=self.last_n)
+
+        if self.text_precondition is not None: # Only create if text_precondition is set
+            self._last_text_precondition_proposition = Proposition(self.targets, self.text_precondition, first_n=self.first_n, last_n=self.last_n)
             llm_precondition_check = self._last_text_precondition_proposition.check()
         else:
-            llm_precondition_check = True
+            llm_precondition_check = True # If no text precondition, it's considered met for this part
+
         
         #
         # Functional precondition
@@ -161,20 +173,8 @@ class Intervention:
         else:
             self._last_functional_precondition_check = True # default to True if no functional precondition is set
         
-        #
-        # Propositional precondition
-        #
-        self._last_propositional_precondition_check = True
-        if self.propositional_precondition is not None:
-            if self.propositional_precondition_threshold is not None:
-                score = self.propositional_precondition.score(target=self.targets)
-                if score >= self.propositional_precondition_threshold:
-                    self._last_propositional_precondition_check = False
-            else:
-                if not self.propositional_precondition.check(target=self.targets):
-                    self._last_propositional_precondition_check = False
 
-        return llm_precondition_check and self._last_functional_precondition_check and self._last_propositional_precondition_check
+        return llm_precondition_check and self._last_functional_precondition_check
 
 
     def apply_effect(self):
@@ -182,7 +182,10 @@ class Intervention:
         Apply the intervention's effects. This won't check the precondition, 
         so it should be called after check_precondition.
         """
-        self.effect_func(self.targets)
+        if self.effect_func is not None: # Ensure effect_func is set
+            self.effect_func(self.targets)
+        else:
+            logger.warning(f"Intervention {self.name} has no effect_func to apply.")
     
 
     ################################################################################################
@@ -241,27 +244,19 @@ class Intervention:
         justification = ""
 
         # text precondition justification
-        if self._last_text_precondition_proposition is not None:
-            justification += f"{self._last_text_precondition_proposition.justification} (confidence = {self._last_text_precondition_proposition.confidence})\n\n"
-        
+        if self._last_text_precondition_proposition is not None and self._last_text_precondition_proposition.value is not None:
+            justification += f"Textual Precondition ('{self.text_precondition}') evaluated to {self._last_text_precondition_proposition.value}. "
+            justification += f"Justification: {self._last_text_precondition_proposition.justification} (Confidence: {self._last_text_precondition_proposition.confidence})\n"
+        elif self.text_precondition is not None:
+            justification += f"Textual Precondition ('{self.text_precondition}') was not evaluated yet or its evaluation failed.\n"
+
         # functional precondition justification
         if self.precondition_func is not None:
-            if self._last_functional_precondition_check == True:
-                justification += f"Functional precondition was met.\n\n"
-            
-            else:
-                justification += "Preconditions do not appear to be met.\n\n"
+
+            justification += f"Functional precondition evaluated to {self._last_functional_precondition_check}.\n"
         
-        # propositional precondition justification
-        if self.propositional_precondition is not None:
-            if self._last_propositional_precondition_check == True:
-                justification += f"Propositional precondition was met.\n\n"
-            else:
-                justification += "Propositional precondition was not met.\n\n"
-
-            return justification
-
-        return justification
+        if not justification:
+            return "Preconditions have not been checked yet or no preconditions are defined."
 
 
-
+        return justification.strip()
