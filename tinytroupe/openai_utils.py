@@ -404,7 +404,14 @@ class AzureClient(OpenAIClient):
 
 
 class OllamaClient(OpenAIClient):
+    """
+    A client for interacting with the Ollama OpenAI-compatible endpoint.
 
+    This class extends the OpenAIClient to provide specific configurations
+    for the Ollama API, which is a local OpenAI-compatible service. It uses
+    environment variables to determine the base URL and API key for the
+    Ollama service.
+    """
     def __init__(self, cache_api_calls=default["cache_api_calls"], cache_file_name=default["cache_file_name"]) -> None:
         logger.debug("Initializing OllamaClient")
 
