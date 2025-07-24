@@ -3,8 +3,10 @@ import json
 import ast
 import os
 import chevron
+
 from typing import Collection, Dict, List, Union
 from pydantic import BaseModel
+
 import copy
 import functools
 import inspect
@@ -832,64 +834,89 @@ def llm(enable_json_output_format:bool=True, enable_justification_step:bool=True
 ################################################################################	
 # Model output utilities
 ################################################################################
-def extract_json(text: str) -> dict:
+def extract_json(text: str) -> Union[dict, list, None]:
     """
-    Extracts a JSON object from a string, ignoring: any text before the first 
-    opening curly brace; and any Markdown opening (```json) or closing(```) tags.
+    Extracts a JSON object or array from a string using multiple strategies.
+    1. Tries direct parsing.
+    2. Tries to extract from markdown code blocks (e.g., ```json ... ```).
+    3. Tries to clean the string by removing common issues and then re-parses.
     """
+
+    if not text or not isinstance(text, str):
+        logger.debug("Input text is empty or not a string, cannot extract JSON.")
+        return None
+
+    original_text = text # Keep a copy for logging if all attempts fail
+
+    # Strategy 1: Try direct parsing (with strict=False for flexibility with control characters)
     try:
-        logger.debug(f"Extracting JSON from text: {text}")
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        logger.debug(f"Direct JSON parsing failed for: {text[:200]}...") # Log snippet
 
-        # if it already is a dictionary or list, return it
-        if isinstance(text, dict) or isinstance(text, list):
-
-            # validate that all the internal contents are indeed JSON-like
+    # Strategy 2: Extract from markdown code blocks
+    # Common patterns: ```json ... ``` or ``` ... ```
+    code_block_patterns = [
+        r"```json\s*([\s\S]*?)\s*```",  # Explicit json markdown
+        r"```\s*([\s\S]*?)\s*```"       # Generic markdown
+    ]
+    for pattern in code_block_patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            potential_json = match.group(1).strip()
             try:
-                json.dumps(text)
-            except Exception as e:
-                logger.error(f"Error occurred while validating JSON: {e}. Input text: {text}.")
-                return {}
+                return json.loads(potential_json, strict=False)
+            except json.JSONDecodeError:
+                logger.debug(f"Parsing from markdown block failed for: {potential_json[:200]}...")
+                # Continue to next pattern or cleaning if this attempt fails
 
-            logger.debug(f"Text is already a dictionary. Returning it.")
-            return text
+    # Strategy 3: Cleaning and Retry
+    cleaned_text = text
 
-        filtered_text = ""
-
-        # remove any text before the first opening curly or square braces, using regex. Leave the braces.
-        filtered_text = re.sub(r'^.*?({|\[)', r'\1', text, flags=re.DOTALL)
-
-        # remove any trailing text after the LAST closing curly or square braces, using regex. Leave the braces.
-        filtered_text  =  re.sub(r'(}|\])(?!.*(\]|\})).*$', r'\1', filtered_text, flags=re.DOTALL)
-        
-        # remove invalid escape sequences, which show up sometimes
-        filtered_text = re.sub("\\'", "'", filtered_text) # replace \' with just '
-        filtered_text = re.sub("\\,", ",", filtered_text)
-
-        # parse the final JSON in a robust manner, to account for potentially messy LLM outputs
-        try:
-            # First try standard JSON parsing
-            # use strict=False to correctly parse new lines, tabs, etc.
-            parsed = json.loads(filtered_text, strict=False)
-        except json.JSONDecodeError:
-            # If JSON parsing fails, try ast.literal_eval which accepts single quotes
-            try:
-                parsed = ast.literal_eval(filtered_text)
-                logger.debug("Used ast.literal_eval as fallback for single-quoted JSON-like text")
-            except:
-                # If both fail, try converting single quotes to double quotes and parse again
-                # Replace single-quoted keys and values with double quotes, without using look-behind
-                # This will match single-quoted strings that are keys or values in JSON-like structures
-                # It may not be perfect for all edge cases, but works for most LLM outputs
-                converted_text = re.sub(r"'([^']*)'", r'"\1"', filtered_text)
-                parsed = json.loads(converted_text, strict=False)
-                logger.debug("Converted single quotes to double quotes before parsing")
-        
-        # return the parsed JSON object
-        return parsed
+    # 3a. Remove text outside the outermost JSON structure (curly braces or square brackets)
+    # Find first '{' or '['
+    first_brace = re.search(r"[{[]", cleaned_text)
+    if not first_brace:
+        logger.debug("No JSON structure found (no '{' or '[').")
+        return None # No JSON structure
     
-    except Exception as e:
-        logger.error(f"Error occurred while extracting JSON: {e}. Input text: {text}. Filtered text: {filtered_text}")
-        return {}
+    cleaned_text = cleaned_text[first_brace.start():]
+
+    # Find last '}' or ']'
+    # This requires careful balancing if nested structures exist, but for now, a simpler approach:
+    # Find the last occurrence that seems to correctly close the structure.
+    # This is tricky with regex alone for deeply nested structures.
+    # A common heuristic: find the last brace. If it's part of an incomplete structure, json.loads will fail.
+    last_curly = cleaned_text.rfind('}')
+    last_square = cleaned_text.rfind(']')
+
+    if last_curly == -1 and last_square == -1:
+        logger.debug("No JSON structure found (no '}' or ']').")
+        return None
+
+    # Choose the one that appears later in the string as the potential end
+    end_index = max(last_curly, last_square)
+    cleaned_text = cleaned_text[:end_index+1]
+
+    # 3b. Attempt to fix common issues like trailing commas
+    # Remove trailing commas in objects: ,} -> }
+    cleaned_text = re.sub(r",\s*}", "}", cleaned_text)
+    # Remove trailing commas in arrays: ,] -> ]
+    cleaned_text = re.sub(r",\s*]", "]", cleaned_text)
+
+    # 3c. Remove problematic escape sequences (if truly necessary and well-understood)
+    # The existing ones (\' and \,) are specific. Let's be cautious.
+    # For now, let's keep them if they were solving a known LLM quirk, but they are unusual.
+    cleaned_text = cleaned_text.replace("\\'", "'") # replace \' with just '
+    cleaned_text = cleaned_text.replace("\\,", ",") # replace \, with , (less common)
+
+    try:
+        return json.loads(cleaned_text, strict=False)
+    except json.JSONDecodeError as e:
+        sanitized_input = re.sub(r'[^\w\s]', '_', original_text[:500])  # Replace non-alphanumeric characters with '_'
+        logger.error(f"All JSON extraction strategies failed for sanitized input: {sanitized_input}... Error: {e}")
+        return None
+
 
 def extract_code_block(text: str) -> str:
     """
