@@ -2,9 +2,10 @@ import pytest
 from unittest.mock import MagicMock
 
 import sys
-sys.path.append('../../tinytroupe/')
-sys.path.append('../../')
-sys.path.append('..')
+# Insert paths at the beginning of sys.path (position 0)
+sys.path.insert(0, '..')
+sys.path.insert(0, '../../')
+sys.path.insert(0, '../../tinytroupe/')
 
 
 from tinytroupe.utils import name_or_empty, extract_json, repeat_on_error
@@ -27,6 +28,7 @@ def test_extract_json():
     result = extract_json(text)
     assert result == {"key": "'value'"}
 
+
     # Test with invalid JSON (trailing comma in object) - should now be fixed or return None
     # The new implementation should parse this successfully due to trailing comma removal.
     text_trailing_comma_obj = 'Some text before {"key": "value",} some text after'
@@ -37,6 +39,7 @@ def test_extract_json():
     text_trailing_comma_array = 'Some text before [{"key": "value"},] some text after'
     result_trailing_comma_array = extract_json(text_trailing_comma_array)
     assert result_trailing_comma_array == [{"key": "value"}]
+
 
     # Test with no JSON
     text_no_json = 'Some text with no JSON'

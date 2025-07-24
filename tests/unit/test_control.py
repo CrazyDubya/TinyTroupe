@@ -2,9 +2,10 @@ import pytest
 import os
 
 import sys
-sys.path.append('../../tinytroupe/')
-sys.path.append('../../')
-sys.path.append('..')
+# Insert paths at the beginning of sys.path (position 0)
+sys.path.insert(0, '..')
+sys.path.insert(0, '../../')
+sys.path.insert(0, '../../tinytroupe/')
 
 
 from tinytroupe.examples import create_oscar_the_architect, create_lisa_the_data_scientist
@@ -172,6 +173,7 @@ def test_begin_checkpoint_end_with_factory(setup):
     assert "'_setup_agent'" in cache_contents, "The cache file should contain the '_setup_agent' call."
     assert "'define'" not in cache_contents, "The cache file should not contain the 'define' methods, as these are reentrant."
     assert "'define_several'" not in cache_contents, "The cache file should not contain the 'define_several' methods, as these are reentrant."
+
 
 
 # Test-specific TinyPerson subclass with simple transactional methods
