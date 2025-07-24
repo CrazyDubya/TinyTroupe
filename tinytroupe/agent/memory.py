@@ -115,7 +115,11 @@ class EpisodicMemory(TinyMemory):
         self.memory_id_map[memory_id] = memory_idx
 
         doc_text = json.dumps(value)
-        document = Document(text=doc_text, metadata={'memory_id': memory_id, 'original_timestamp': value.get('simulation_timestamp')})
+        if isinstance(value, dict):
+            original_timestamp = value.get('simulation_timestamp')
+        else:
+            original_timestamp = None  # Default value if 'value' is not a dictionary
+        document = Document(text=doc_text, metadata={'memory_id': memory_id, 'original_timestamp': original_timestamp})
         self.semantic_connector.add_document(document)
 
     def count(self) -> int:
