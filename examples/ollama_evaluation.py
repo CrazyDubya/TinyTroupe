@@ -9,7 +9,7 @@ from tinytroupe import openai_utils
 openai_utils.force_api_type("ollama")
 
 # Optionally override the model list via environment variable
-models = os.getenv("OLLAMA_MODELS", "llama2\nphi3\nllava-llama3").split()
+models = os.getenv("OLLAMA_MODELS", "llama2\nphi3\nllava-llama3").split('\n')
 
 prompt = "Give me a short fun fact about artificial intelligence."
 
