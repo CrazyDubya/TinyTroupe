@@ -126,6 +126,7 @@ To run the library, you need:
   - Access to Azure OpenAI Service or Open AI GPT-4 APIs. You can get access to the Azure OpenAI Service [here](https://azure.microsoft.com/en-us/products/ai-services/openai-service), and to the OpenAI API [here](https://platform.openai.com/). 
       * For Azure OpenAI Service, you will need to set the `AZURE_OPENAI_KEY` and `AZURE_OPENAI_ENDPOINT` environment variables to your API key and endpoint, respectively.
       * For OpenAI, you will need to set the `OPENAI_API_KEY` environment variable to your API key.
+      * For a local Ollama instance, set `OLLAMA_BASE_URL` (defaults to `http://localhost:11434/v1`) and optionally `OLLAMA_API_KEY` if required by your setup.
   - By default, TinyTroupe `config.ini` is set to use OpenAI API with `gpt-4o-mini` as the main model. You can customize these values by including your own `config.ini` file in the same folder as the program or notebook you are running. An example of a `config.ini` file is provided in the [examples/](./examples/) folder.
 
 >[!IMPORTANT]
@@ -504,7 +505,7 @@ LLM API caching, when enabled, works at a lower and simpler level than simulatio
 
 ### Config.ini
 
-The `config.ini` file contains various parameters that can be used to customize the behavior of the library, such as model parameters and logging level. Please pay special attention to the `API_TYPE` parameter, which defines whether you are using the Azure OpenAI Service or the OpenAI API. The current default is set to `openai` (OpenAI API).
+The `config.ini` file contains various parameters that can be used to customize the behavior of the library, such as model parameters and logging level. Please pay special attention to the `API_TYPE` parameter, which defines the backend. Options now include `openai`, `azure`, and `ollama` for a locally hosted [Ollama](https://ollama.ai) instance. The current default is `openai`.
 
 Key configuration sections include:
 - **[OpenAI]**: API settings, model selection, and parameters

@@ -401,6 +401,21 @@ class AzureClient(OpenAIClient):
                 api_version = config["OpenAI"]["AZURE_API_VERSION"],
                 azure_ad_token_provider=token_provider
             )
+
+
+class OllamaClient(OpenAIClient):
+
+    def __init__(self, cache_api_calls=default["cache_api_calls"], cache_file_name=default["cache_file_name"]) -> None:
+        logger.debug("Initializing OllamaClient")
+
+        super().__init__(cache_api_calls, cache_file_name)
+
+    def _setup_from_config(self):
+        """Configure Ollama OpenAI-compatible endpoint."""
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        api_key = os.getenv("OLLAMA_API_KEY", "ollama")
+        logger.info(f"Using Ollama local API at {base_url}.")
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
     
 
 ###########################################################################
@@ -493,6 +508,7 @@ def force_api_cache(cache_api_calls, cache_file_name=default["cache_file_name"])
 # default client
 register_client("openai", OpenAIClient())
 register_client("azure", AzureClient())
+register_client("ollama", OllamaClient())
 
 
 
