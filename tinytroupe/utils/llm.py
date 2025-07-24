@@ -836,23 +836,63 @@ def llm(enable_json_output_format:bool=True, enable_justification_step:bool=True
 ################################################################################
 def extract_json(text: str) -> Union[dict, list, None]:
     """
-    Extracts a JSON object or array from a string using multiple strategies.
-    1. Tries direct parsing.
-    2. Tries to extract from markdown code blocks (e.g., ```json ... ```).
-    3. Tries to clean the string by removing common issues and then re-parses.
+    Securely extracts a JSON object or array from a string using multiple strategies.
+    
+    Security improvements:
+    1. Uses strict JSON parsing by default
+    2. Validates input length to prevent DoS attacks
+    3. Sanitizes extraction with better error handling
+    4. Limits recursion depth in JSON structures
+    
+    Strategies:
+    1. Tries direct parsing with strict validation
+    2. Tries to extract from markdown code blocks (e.g., ```json ... ```)  
+    3. Tries to clean common LLM output issues and re-parse
     """
-
+    
+    # Input validation
     if not text or not isinstance(text, str):
         logger.debug("Input text is empty or not a string, cannot extract JSON.")
         return None
+    
+    # Security: Limit input size to prevent DoS attacks
+    MAX_INPUT_SIZE = 1_000_000  # 1MB limit
+    if len(text) > MAX_INPUT_SIZE:
+        logger.warning(f"Input text too large ({len(text)} chars), truncating to {MAX_INPUT_SIZE}")
+        text = text[:MAX_INPUT_SIZE]
 
-    original_text = text # Keep a copy for logging if all attempts fail
+    original_text = text[:500] + "..." if len(text) > 500 else text  # For safe logging
 
-    # Strategy 1: Try direct parsing (with strict=False for flexibility with control characters)
-    try:
-        return json.loads(text, strict=False)
-    except json.JSONDecodeError:
-        logger.debug(f"Direct JSON parsing failed for: {text[:200]}...") # Log snippet
+    def safe_json_loads(json_str: str) -> Union[dict, list, None]:
+        """Safely parse JSON with strict validation and limits."""
+        try:
+            # Use strict=True for security, and set limits to prevent DoS
+            result = json.loads(json_str)
+            
+            # Basic validation: ensure reasonable structure depth
+            def check_depth(obj, max_depth=50, current_depth=0):
+                if current_depth > max_depth:
+                    raise ValueError("JSON structure too deeply nested")
+                if isinstance(obj, dict):
+                    for value in obj.values():
+                        check_depth(value, max_depth, current_depth + 1)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        check_depth(item, max_depth, current_depth + 1)
+            
+            check_depth(result)
+            return result
+            
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.debug(f"JSON parsing failed: {e}")
+            return None
+
+    # Strategy 1: Try direct parsing with strict validation
+    result = safe_json_loads(text)
+    if result is not None:
+        return result
+    
+    logger.debug(f"Direct JSON parsing failed for: {original_text}")
 
     # Strategy 2: Extract from markdown code blocks
     # Common patterns: ```json ... ``` or ``` ... ```
@@ -860,62 +900,69 @@ def extract_json(text: str) -> Union[dict, list, None]:
         r"```json\s*([\s\S]*?)\s*```",  # Explicit json markdown
         r"```\s*([\s\S]*?)\s*```"       # Generic markdown
     ]
-    for pattern in code_block_patterns:
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            potential_json = match.group(1).strip()
-            try:
-                return json.loads(potential_json, strict=False)
-            except json.JSONDecodeError:
-                logger.debug(f"Parsing from markdown block failed for: {potential_json[:200]}...")
-                # Continue to next pattern or cleaning if this attempt fails
-
-    # Strategy 3: Cleaning and Retry
-    cleaned_text = text
-
-    # 3a. Remove text outside the outermost JSON structure (curly braces or square brackets)
-    # Find first '{' or '['
-    first_brace = re.search(r"[{[]", cleaned_text)
-    if not first_brace:
-        logger.debug("No JSON structure found (no '{' or '[').")
-        return None # No JSON structure
     
-    cleaned_text = cleaned_text[first_brace.start():]
+    for pattern in code_block_patterns:
+        try:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                potential_json = match.group(1).strip()
+                result = safe_json_loads(potential_json)
+                if result is not None:
+                    return result
+                logger.debug(f"Parsing from markdown block failed for: {potential_json[:200]}...")
+        except re.error as e:
+            logger.warning(f"Regex error in markdown extraction: {e}")
+            continue
 
-    # Find last '}' or ']'
-    # This requires careful balancing if nested structures exist, but for now, a simpler approach:
-    # Find the last occurrence that seems to correctly close the structure.
-    # This is tricky with regex alone for deeply nested structures.
-    # A common heuristic: find the last brace. If it's part of an incomplete structure, json.loads will fail.
-    last_curly = cleaned_text.rfind('}')
-    last_square = cleaned_text.rfind(']')
-
-    if last_curly == -1 and last_square == -1:
-        logger.debug("No JSON structure found (no '}' or ']').")
-        return None
-
-    # Choose the one that appears later in the string as the potential end
-    end_index = max(last_curly, last_square)
-    cleaned_text = cleaned_text[:end_index+1]
-
-    # 3b. Attempt to fix common issues like trailing commas
-    # Remove trailing commas in objects: ,} -> }
-    cleaned_text = re.sub(r",\s*}", "}", cleaned_text)
-    # Remove trailing commas in arrays: ,] -> ]
-    cleaned_text = re.sub(r",\s*]", "]", cleaned_text)
-
-    # 3c. Remove problematic escape sequences (if truly necessary and well-understood)
-    # The existing ones (\' and \,) are specific. Let's be cautious.
-    # For now, let's keep them if they were solving a known LLM quirk, but they are unusual.
-    cleaned_text = cleaned_text.replace("\\'", "'") # replace \' with just '
-    cleaned_text = cleaned_text.replace("\\,", ",") # replace \, with , (less common)
-
+    # Strategy 3: Conservative cleaning and retry
+    cleaned_text = text
+    
     try:
-        return json.loads(cleaned_text, strict=False)
-    except json.JSONDecodeError as e:
-        sanitized_input = re.sub(r'[^\w\s]', '_', original_text[:500])  # Replace non-alphanumeric characters with '_'
-        logger.error(f"All JSON extraction strategies failed for sanitized input: {sanitized_input}... Error: {e}")
-        return None
+        # 3a. Find JSON structure boundaries more carefully
+        # Find first '{' or '['
+        first_brace = re.search(r"[{[]", cleaned_text)
+        if not first_brace:
+            logger.debug("No JSON structure found (no '{' or '[').")
+            return None
+        
+        cleaned_text = cleaned_text[first_brace.start():]
+
+        # For security, limit the search scope
+        if len(cleaned_text) > 100_000:  # 100KB limit for cleaning
+            logger.warning("Text too large for cleaning, truncating")
+            cleaned_text = cleaned_text[:100_000]
+
+        # Use a simpler approach to find the end of JSON structure
+        # Find last '}' or ']' as a fallback - safer than complex parsing
+        last_curly = cleaned_text.rfind('}')
+        last_square = cleaned_text.rfind(']')
+        
+        if last_curly == -1 and last_square == -1:
+            logger.debug("No JSON structure found (no '}' or ']').")
+            return None
+        
+        # Choose the one that appears later in the string as the potential end
+        end_index = max(last_curly, last_square)
+        cleaned_text = cleaned_text[:end_index + 1]
+
+        # 3b. Fix common LLM output issues (conservatively)
+        # Remove trailing commas in objects and arrays
+        cleaned_text = re.sub(r",\s*([}\]])", r"\1", cleaned_text)
+        
+        # Remove problematic escape sequences only for known safe cases
+        # Be very conservative here to avoid security issues
+        cleaned_text = cleaned_text.replace("\\'", "'")  # Single quotes don't need escaping in JSON
+        
+        result = safe_json_loads(cleaned_text)
+        if result is not None:
+            return result
+            
+    except (re.error, Exception) as e:
+        logger.warning(f"Error during JSON cleaning: {e}")
+
+    # If all strategies fail, log safely and return None
+    logger.error(f"All JSON extraction strategies failed for input: {original_text}")
+    return None
 
 
 def extract_code_block(text: str) -> str:
