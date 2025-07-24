@@ -46,7 +46,6 @@ class TinyPerson(JsonSerializableRegistry):
     MAX_EPISODE_LENGTH = config_manager.get("max_episode_length", 50)  # The maximum number of messages in an episode before it is considered valid.
 
 
-    PP_TEXT_WIDTH = 100
 
     serializable_attributes = ["_persona", "_mental_state", "_mental_faculties", "_current_episode_event_count", "episodic_memory", "semantic_memory"]
     serializable_attributes_renaming = {"_mental_faculties": "mental_faculties", "_persona": "persona", "_mental_state": "mental_state", "_current_episode_event_count": "current_episode_event_count"}
