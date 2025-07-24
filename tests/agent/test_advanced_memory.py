@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock, call
 import json
-import uuid # Added for potential direct ID creation in tests if needed
+# (Line removed)
 
 from tinytroupe.agent.memory import EpisodicMemory, SemanticMemory
 from tinytroupe.agent.tiny_person import TinyPerson
