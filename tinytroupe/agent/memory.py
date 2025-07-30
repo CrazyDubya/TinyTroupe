@@ -505,6 +505,9 @@ class SemanticMemory(TinyMemory):
                 engram['content'] = f"# Reflection\n" +\
                         f"I have reflected on the following memory at date and time {value['simulation_timestamp']}:\n\n"+\
                         f" {value['content']}"
+            elif value['type'] == 'synthesized_knowledge':
+                engram['content'] = f"# Synthesized Knowledge (Reflected on: {value.get('source_reflection_timestamp', 'N/A')}, From: {value.get('reflected_episodes_count', 'N/A')} episodes)\n" +\
+                         f"Insight: {value['content']}"
             else:
                 engram['content'] = f"# Information\n" +\
                         f"I have obtained following information at date and time {value['simulation_timestamp']}:\n\n"+\
@@ -518,16 +521,6 @@ class SemanticMemory(TinyMemory):
                     "content": value,
                     "type": "information",  # Default to 'information' if type is not specified
                     "simulation_timestamp": None}
-
-        elif value['type'] == 'synthesized_knowledge':
-            engram = f"# Synthesized Knowledge (Reflected on: {value.get('source_reflection_timestamp', 'N/A')}, From: {value.get('reflected_episodes_count', 'N/A')} episodes)\n" +\
-                     f"Insight: {value['content']}"
-
-        # else: # Anything else here?
-        # Ensure value is a dict before accessing type, otherwise raise a TypeError
-        elif not isinstance(value, dict):
-            # If value is not a dict, raise an error to enforce the API contract.
-            raise TypeError(f"Expected a dictionary for preprocessing, but got {type(value).__name__}: {value}")
 
         return engram
 
