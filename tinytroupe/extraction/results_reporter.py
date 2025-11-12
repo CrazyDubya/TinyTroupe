@@ -6,7 +6,6 @@ from rich.markdown import Markdown
 
 from tinytroupe.extraction import logger
 from tinytroupe.agent import TinyPerson
-from tinytroupe.environment import TinyWorld
 from tinytroupe.utils import LLMChat
 from tinytroupe import default
 
@@ -31,7 +30,7 @@ class ResultsReporter:
         self.last_report = None
     
     def report_from_agents(self,
-                          agents: Union[TinyPerson, TinyWorld, List[TinyPerson]],
+                          agents: Union[TinyPerson, List[TinyPerson]],
                           reporting_task: str = None,
                           report_title: str = "Simulation Report",
                           include_agent_summaries: bool = True,
@@ -83,7 +82,7 @@ class ResultsReporter:
         return report
     
     def report_from_interactions(self,
-                                agents: Union[TinyPerson, TinyWorld, List[TinyPerson]],
+                                agents: Union[TinyPerson, 'TinyWorld', List[TinyPerson]],
                                 report_title: str = "Interaction Analysis Report",
                                 include_agent_summaries: bool = True,
                                 first_n: int = None,
@@ -206,6 +205,7 @@ class ResultsReporter:
     
     def _extract_agents(self, agents) -> List[TinyPerson]:
         """Extract a list of TinyPerson objects from various input types."""
+        from tinytroupe.environment import TinyWorld
         if isinstance(agents, TinyPerson):
             return [agents]
         elif isinstance(agents, TinyWorld):

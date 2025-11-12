@@ -1,5 +1,5 @@
 import json
-
+import uuid
 from tinytroupe.agent import logger
 from tinytroupe.agent.mental_faculty import TinyMentalFaculty
 from tinytroupe.agent.grounding import BaseSemanticGroundingConnector
@@ -250,23 +250,8 @@ class EpisodicMemory(TinyMemory):
         """
         Ends the current episode, storing the episodic buffer in memory.
         """
-# From enhancement-E001-memory-management
-memory_id = str(uuid.uuid4())
-self.memory.append(value)
-memory_idx = len(self.memory) - 1
-self.memory_id_map[memory_id] = memory_idx
-
-doc_text = json.dumps(value)
-if isinstance(value, dict):
-    original_timestamp = value.get('simulation_timestamp')
-else:
-    original_timestamp = None  # Default value if 'value' is not a dictionary
-document = Document(text=doc_text, metadata={'memory_id': memory_id, 'original_timestamp': original_timestamp})
-self.semantic_connector.add_document(document)
-
-# From main
-self.memory.extend(self.episodic_buffer)
-self.episodic_buffer = []
+        self.memory.extend(self.episodic_buffer)
+        self.episodic_buffer = []
 
 def get_current_episode(self, item_types: list = None) -> list:
     """

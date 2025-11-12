@@ -2,7 +2,6 @@ import json
 from chevron import render
 
 from tinytroupe.agent import TinyPerson
-from tinytroupe.environment import TinyWorld
 from tinytroupe.utils import LLMChat, indent_at_current_level
 from tinytroupe.experimentation import logger
 
@@ -399,6 +398,7 @@ class Proposition:
         #
         context = ""
 
+        from tinytroupe.environment import TinyWorld
         for target in current_targets:
             target_trajectory = target.pretty_current_interactions(max_content_length=None, first_n=self.first_n, last_n=self.last_n)
 
