@@ -2,7 +2,6 @@ from typing import List
 
 from tinytroupe.extraction import logger
 from tinytroupe.agent import TinyPerson
-from tinytroupe.environment import TinyWorld
 import tinytroupe.utils as utils
 from tinytroupe import openai_utils
 
@@ -12,7 +11,7 @@ class TinyStory:
     """
 
 
-    def __init__(self, environment:TinyWorld=None, agent:TinyPerson=None, purpose:str="Be a realistic simulation.", context:str="",
+    def __init__(self, environment:'TinyWorld'=None, agent:TinyPerson=None, purpose:str="Be a realistic simulation.", context:str="",
                  first_n=10, last_n=20, include_omission_info:bool=True) -> None:
         """
         Initialize the story. The story can be about an environment or an agent. It also has a purpose, which

@@ -3,7 +3,6 @@ from tinytroupe.extraction import logger
 # Ensure JsonSerializableRegistry is imported
 from tinytroupe.utils import JsonSerializableRegistry
 from tinytroupe.experimentation import Proposition
-from tinytroupe.environment import TinyWorld
 from tinytroupe.agent import TinyPerson
 import tinytroupe.utils as utils
 
@@ -58,7 +57,7 @@ class Intervention(JsonSerializableRegistry):
     serializable_attributes = ["name", "text_precondition", "first_n", "last_n"]
 
 
-    def __init__(self, targets: Union[TinyPerson, TinyWorld, List[TinyPerson], List[TinyWorld]], 
+    def __init__(self, targets: Union[TinyPerson, 'TinyWorld', List[TinyPerson], List['TinyWorld']],
                  first_n:int=DEFAULT_FIRST_N, last_n:int=DEFAULT_LAST_N,
                  name: str = None):
         """

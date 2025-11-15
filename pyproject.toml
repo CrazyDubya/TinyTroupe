@@ -35,7 +35,10 @@ dependencies = [
     "pydantic",
     "pypandoc",
     "textdistance",
-    "scipy"
+    "scipy",
+    "nbformat",
+    "nbconvert",
+    "ipython"
 ]
 
 [project.urls]

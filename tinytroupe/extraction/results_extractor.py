@@ -6,7 +6,6 @@ from typing import Union, List
 
 from tinytroupe.extraction import logger
 from tinytroupe.agent import TinyPerson
-from tinytroupe.environment import TinyWorld
 
 from tinytroupe import openai_utils
 import tinytroupe.utils as utils
@@ -152,7 +151,7 @@ performed.
     
 
     def extract_results_from_world(self, 
-                                   tinyworld:TinyWorld, 
+                                   tinyworld,
                                    extraction_objective:str="The main points that can be derived from the agents conversations and actions.", 
                                    situation:str="", 
                                    fields:list=None,
