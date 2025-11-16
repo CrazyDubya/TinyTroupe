@@ -805,17 +805,17 @@ TinyTroupe Core
 
 ## Migration Strategy
 
-### Phase 1: Backward Compatible Additions
+### Migration Phase 1: Backward Compatible Additions (Implementation Weeks 1-10)
 - Add new features as opt-in
 - Maintain existing APIs
 - Deprecation warnings for future changes
 
-### Phase 2: Parallel Support
+### Migration Phase 2: Parallel Support (Implementation Weeks 11-16)
 - Both old and new APIs work
 - Migration guides published
 - Automated migration tools
 
-### Phase 3: Breaking Changes (v1.0.0)
+### Migration Phase 3: Breaking Changes - v1.0.0 (Implementation Weeks 17-24)
 - Remove deprecated APIs
 - Full transition to new architecture
 - Legacy mode available for 6 months

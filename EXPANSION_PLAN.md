@@ -475,7 +475,7 @@ Each phase must meet these criteria before proceeding:
 ### Technical Metrics
 | Metric | Current | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
 |--------|---------|---------|---------|---------|---------|
-| Test Coverage | 70% | 80% | 85% | 90% | 95% |
+| Test Coverage | 70% | >=80% | 85% | 90% | 95% |
 | Performance (10 agents) | 10min | 5min | 4min | 3min | 2min |
 | Memory Efficiency | Unbounded | 500MB | 400MB | 300MB | 200MB |
 | Cache Hit Rate | 40% | 60% | 70% | 75% | 80% |

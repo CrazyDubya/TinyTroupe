@@ -806,7 +806,7 @@ tests/unit/test_mock_llm.py (new)
 - Follow PEP 8 for all Python code
 - Use type hints for all new functions
 - Write docstrings in Google style
-- Maintain <80% line coverage for all new code
+- Maintain >=80% line coverage for all new code
 
 ### Testing Requirements
 - Unit tests for all new functions

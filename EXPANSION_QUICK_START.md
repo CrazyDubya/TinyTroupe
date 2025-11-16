@@ -42,8 +42,8 @@ Transform TinyTroupe from a research prototype into a production-ready multiagen
 
 ### Step 1: Review Current State
 ```bash
-# Ensure you're on the correct branch
-git checkout claude/prep-major-expansion-018HXYCcspXCWe3e3M7Wvg81
+# Replace <expansion-branch-name> with the appropriate branch for your context
+git checkout <expansion-branch-name>
 
 # Review completed security work
 cat AUDIT_SUMMARY.md
