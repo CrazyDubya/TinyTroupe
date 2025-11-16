@@ -19,5 +19,15 @@ Example usage:
 """
 
 from .jupyter_widgets import AgentChatJupyterWidget
+from .api_dashboard import (
+    TinyTroupeDashboard,
+    create_dashboard_app,
+    run_dashboard,
+)
 
-__all__ = ['AgentChatJupyterWidget']
+__all__ = [
+    'AgentChatJupyterWidget',
+    'TinyTroupeDashboard',
+    'create_dashboard_app',
+    'run_dashboard',
+]
