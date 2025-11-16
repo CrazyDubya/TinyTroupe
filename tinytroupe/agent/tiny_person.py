@@ -191,9 +191,20 @@ class TinyPerson(JsonSerializableRegistry):
         
         if not hasattr(self, 'actions_count'):
             self.actions_count = 0
-        
+
         if not hasattr(self, 'stimuli_count'):
             self.stimuli_count = 0
+
+        # Consolidation metrics
+        if not hasattr(self, 'consolidation_metrics'):
+            self.consolidation_metrics = {
+                'total_consolidations': 0,
+                'automatic_consolidations': 0,
+                'manual_consolidations': 0,
+                'last_consolidation_time': None,
+                'total_memories_consolidated': 0,
+                'average_consolidation_size': 0
+            }
 
         self._prompt_template_path = os.path.join(
             os.path.dirname(__file__), "prompts/tiny_person.mustache"
@@ -1020,38 +1031,85 @@ max_content_length=max_content_length,
     def store_in_memory(self, value: Any) -> None:
         """
         Stores a value in episodic memory and manages episode length.
-        
+        Automatically triggers consolidation if memory thresholds are reached.
+
         Args:
             value: The memory item to store (e.g., action, stimulus, thought)
-            
+
         Returns:
             None
         """
         self.episodic_memory.store(value)
-        
+
         self._current_episode_event_count += 1
         logger.debug(f"[{self.name}] Current episode event count: {self._current_episode_event_count}.")
+
+        # Check if automatic consolidation should be triggered
+        if self.should_consolidate():
+            logger.info(f"[{self.name}] Automatic consolidation triggered at {self._current_episode_event_count} events.")
+            self.consolidate_episode_memories(force=True, is_automatic=True)
+            return  # Early return since consolidation already happened
 
         if self._current_episode_event_count >= self.MAX_EPISODE_LENGTH:
             # commit the current episode to memory, if it is long enough
             logger.warning(f"[{self.name}] Episode length exceeded {self.MAX_EPISODE_LENGTH} events. Committing episode to memory. Please check whether this was expected or not.")
             self.consolidate_episode_memories()
     
-    def consolidate_episode_memories(self) -> bool:
+    def should_consolidate(self) -> bool:
+        """
+        Determines whether memory consolidation should be triggered based on current memory state.
+
+        Checks:
+        - Whether auto-consolidation is enabled in config
+        - Whether memory has reached the consolidation threshold
+        - Whether episode has minimum required length
+
+        Returns:
+            bool: True if consolidation should be triggered, False otherwise.
+        """
+        # Check if auto-consolidation is enabled
+        auto_consolidate = config_manager.get("auto_consolidate_on_threshold", True)
+        if not auto_consolidate:
+            return False
+
+        # Check memory statistics
+        memory_stats = self.episodic_memory.get_memory_stats()
+        consolidation_threshold = config_manager.get("auto_consolidation_threshold", 500)
+
+        # Trigger if total memory (committed + buffer) exceeds threshold
+        if memory_stats['total_size'] >= consolidation_threshold:
+            logger.debug(f"[{self.name}] Auto-consolidation triggered: {memory_stats['total_size']} >= {consolidation_threshold}")
+            return True
+
+        # Also trigger if approaching memory limit
+        if memory_stats['approaching_limit']:
+            logger.debug(f"[{self.name}] Auto-consolidation triggered: approaching memory limit")
+            return True
+
+        return False
+
+    def consolidate_episode_memories(self, force: bool = False, is_automatic: bool = False) -> bool:
         """
         Applies all memory consolidation or transformation processes appropriate to the conclusion of one simulation episode.
-        
+
+        Args:
+            force: If True, bypass the minimum episode length check and consolidate anyway.
+            is_automatic: If True, this consolidation was triggered automatically (for metrics).
+
         Returns:
             bool: True if memories were successfully consolidated, False otherwise.
         """
+        import time
+        start_time = time.time()
+
         # a minimum length of the episode is required to consolidate it, to avoid excessive fragments in the semantic memory
-        if self._current_episode_event_count > self.MIN_EPISODE_LENGTH:
+        if force or self._current_episode_event_count > self.MIN_EPISODE_LENGTH:
             logger.debug(f"[{self.name}] ***** Consolidating current episode memories into semantic memory *****")
-        
+
             # Consolidate latest episodic memories into semantic memory
             if config_manager.get("enable_memory_consolidation"):
-                
-                
+
+
                     episodic_consolidator = EpisodicConsolidator()
                     episode = self.episodic_memory.get_current_episode(item_types=["action", "stimulus"],)
                     logger.debug(f"[{self.name}] Current episode: {episode}")
@@ -1060,6 +1118,9 @@ max_content_length=max_content_length,
                         logger.info(f"[{self.name}] Consolidating current {len(episode)} episodic events as consolidated semantic memories.")
                         logger.debug(f"[{self.name}] Consolidated memories: {consolidated_memories}")
                         self.semantic_memory.store_all(consolidated_memories)
+
+                        # Update consolidation metrics
+                        self._update_consolidation_metrics(len(episode), is_automatic, time.time() - start_time)
                     else:
                         logger.warning(f"[{self.name}] No memories to consolidate from the current episode.")
 
@@ -1072,6 +1133,44 @@ max_content_length=max_content_length,
             logger.debug(f"[{self.name}] Current episode event count reset to 0 after consolidation.")
 
             # TODO reflections, optimizations, etc.
+
+    def _update_consolidation_metrics(self, episode_size: int, is_automatic: bool, duration: float):
+        """
+        Updates metrics tracking for memory consolidation.
+
+        Args:
+            episode_size: Number of memories in the consolidated episode
+            is_automatic: Whether this was an automatic consolidation
+            duration: Time taken to perform consolidation (in seconds)
+        """
+        self.consolidation_metrics['total_consolidations'] += 1
+
+        if is_automatic:
+            self.consolidation_metrics['automatic_consolidations'] += 1
+        else:
+            self.consolidation_metrics['manual_consolidations'] += 1
+
+        self.consolidation_metrics['total_memories_consolidated'] += episode_size
+        self.consolidation_metrics['last_consolidation_time'] = duration
+
+        # Update running average
+        total = self.consolidation_metrics['total_consolidations']
+        current_avg = self.consolidation_metrics['average_consolidation_size']
+        self.consolidation_metrics['average_consolidation_size'] = (
+            (current_avg * (total - 1) + episode_size) / total
+        )
+
+        logger.debug(f"[{self.name}] Consolidation metrics updated: {self.consolidation_metrics}")
+
+    def get_consolidation_metrics(self) -> dict:
+        """
+        Returns consolidation performance metrics.
+
+        Returns:
+            dict: Dictionary containing consolidation metrics including total consolidations,
+                  automatic vs manual, average size, etc.
+        """
+        return self.consolidation_metrics.copy()
 
     def optimize_memory(self):
         pass #TODO
