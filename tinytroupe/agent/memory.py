@@ -4,11 +4,13 @@ from tinytroupe.agent import logger
 from tinytroupe.agent.mental_faculty import TinyMentalFaculty
 from tinytroupe.agent.grounding import BaseSemanticGroundingConnector
 import tinytroupe.utils as utils
+from tinytroupe import config_manager
 
 
 from llama_index.core import Document
-from typing import Any
+from typing import Any, Optional
 import copy
+from collections import deque
 
 import json
 
@@ -227,7 +229,8 @@ class EpisodicMemory(TinyMemory):
     MEMORY_BLOCK_OMISSION_INFO = {'role': 'assistant', 'content': "Info: there were other messages here, but they were omitted for brevity.", 'simulation_timestamp': None}
 
     def __init__(
-        self, fixed_prefix_length: int = 20, lookback_length: int = 100
+        self, fixed_prefix_length: int = 20, lookback_length: int = 100,
+        max_size: Optional[int] = None, cleanup_strategy: str = "fifo"
     ) -> None:
         """
         Initializes the memory.
@@ -235,25 +238,62 @@ class EpisodicMemory(TinyMemory):
         Args:
             fixed_prefix_length (int): The fixed prefix length. Defaults to 20.
             lookback_length (int): The lookback length. Defaults to 100.
+            max_size (int, optional): Maximum number of memories to store. If None, reads from config.
+                                      Set to 0 for unbounded memory (not recommended for long simulations).
+            cleanup_strategy (str): Strategy for removing memories when max_size is reached.
+                                   Options: 'fifo' (first-in-first-out), 'age', 'relevance'.
+                                   Defaults to 'fifo'.
         """
         self.fixed_prefix_length = fixed_prefix_length
         self.lookback_length = lookback_length
 
+        # Load memory configuration from config or use provided values
+        if max_size is None:
+            max_size = config_manager.get("max_episodic_memory_size", 1000)
+
+        self.max_size = max_size if max_size and max_size > 0 else None
+        self.cleanup_strategy = cleanup_strategy or config_manager.get("memory_cleanup_strategy", "fifo")
+        self.warning_threshold = config_manager.get("memory_warning_threshold", 0.8)
+        self._warning_issued = False  # Track if we've already warned about memory limits
+
         # the definitive memory that records all episodic events
-        self.memory = []
+        # Use deque with maxlen for FIFO strategy, otherwise use list
+        if self.max_size and self.cleanup_strategy == "fifo":
+            self.memory = deque(maxlen=self.max_size)
+        else:
+            self.memory = []
+
+        # Initialize episodic buffer for current episode
+        self.episodic_buffer = []
+
         self.semantic_connector = BaseSemanticGroundingConnector(name="Episodic Memory Index")
         self.memory_id_map = {}
+
+        logger.debug(f"EpisodicMemory initialized with max_size={self.max_size}, cleanup_strategy={self.cleanup_strategy}")
 
 
 
     def commit_episode(self):
         """
         Ends the current episode, storing the episodic buffer in memory.
+        Applies cleanup strategies if memory limits are exceeded.
         """
-        self.memory.extend(self.episodic_buffer)
+        # For deque with maxlen, extend automatically handles overflow
+        if isinstance(self.memory, deque):
+            self.memory.extend(self.episodic_buffer)
+        else:
+            # For list-based memory, manually extend and cleanup
+            self.memory.extend(self.episodic_buffer)
+            self._cleanup_memory_if_needed()
+
         self.episodic_buffer = []
 
-def get_current_episode(self, item_types: list = None) -> list:
+        # Check and warn about memory usage after commit
+        self._check_memory_size_and_warn()
+
+        logger.debug(f"Episode committed. Memory stats: {self.get_memory_stats()}")
+
+    def get_current_episode(self, item_types: list = None) -> list:
     """
     Returns the current episode buffer, which is used to store messages during an episode.
 
@@ -276,7 +316,7 @@ def get_current_episode(self, item_types: list = None) -> list:
 
     def clear(self, max_prefix_to_clear:int=None, max_suffix_to_clear:int=None):
         """
-        Clears the memory, generating a permanent "episodic amnesia". 
+        Clears the memory, generating a permanent "episodic amnesia".
         If max_prefix_to_clear is not None, it clears the first n values from memory.
         If max_suffix_to_clear is not None, it clears the last n values from memory. If both are None,
         it clears all values from memory.
@@ -289,31 +329,124 @@ def get_current_episode(self, item_types: list = None) -> list:
         # clears all episodic buffer messages
         self.episodic_buffer = []
 
+        # Convert deque to list for slicing operations, then convert back
+        memory_list = list(self.memory)
+
         # then clears the memory according to the parameters
         if max_prefix_to_clear is not None:
-            self.memory = self.memory[max_prefix_to_clear:]
+            memory_list = memory_list[max_prefix_to_clear:]
 
         if max_suffix_to_clear is not None:
-            self.memory = self.memory[:-max_suffix_to_clear]
+            memory_list = memory_list[:-max_suffix_to_clear]
 
         if max_prefix_to_clear is None and max_suffix_to_clear is None:
-            self.memory = []
+            memory_list = []
+
+        # Restore to appropriate data structure
+        if isinstance(self.memory, deque):
+            self.memory = deque(memory_list, maxlen=self.max_size)
+        else:
+            self.memory = memory_list
+
+        # Reset warning flag after clearing
+        self._warning_issued = False
     
     def _memory_with_current_buffer(self) -> list:
         """
         Returns the current memory, including the episodic buffer.
         This is useful for retrieving the most recent memories, including the current episode.
         """
-        return self.memory + self.episodic_buffer
+        # Convert deque to list for concatenation
+        memory_list = list(self.memory) if isinstance(self.memory, deque) else self.memory
+        return memory_list + self.episodic_buffer
         
+    ######################################
+    # Memory management methods
+    ######################################
+
+    def _check_memory_size_and_warn(self) -> None:
+        """
+        Checks memory size and issues warnings if approaching limits.
+        """
+        if self.max_size is None:
+            return
+
+        current_size = len(self.memory)
+        usage_ratio = current_size / self.max_size
+
+        if usage_ratio >= self.warning_threshold and not self._warning_issued:
+            logger.warning(
+                f"Memory usage is at {usage_ratio:.1%} ({current_size}/{self.max_size} memories). "
+                f"Consider enabling memory consolidation or increasing MAX_EPISODIC_MEMORY_SIZE."
+            )
+            self._warning_issued = True
+        elif usage_ratio < self.warning_threshold:
+            # Reset warning flag if usage drops below threshold
+            self._warning_issued = False
+
+    def _cleanup_memory_if_needed(self) -> None:
+        """
+        Removes old memories based on cleanup strategy if max size is exceeded.
+        Only applies for non-FIFO strategies (FIFO is handled by deque automatically).
+        """
+        if self.max_size is None or self.cleanup_strategy == "fifo":
+            return  # FIFO is handled by deque, no manual cleanup needed
+
+        if isinstance(self.memory, list) and len(self.memory) > self.max_size:
+            excess = len(self.memory) - self.max_size
+
+            if self.cleanup_strategy == "age":
+                # Remove oldest memories (with oldest timestamps)
+                self.memory.sort(key=lambda m: m.get('simulation_timestamp') or '', reverse=True)
+                self.memory = self.memory[:self.max_size]
+                logger.debug(f"Removed {excess} oldest memories using age-based cleanup")
+
+            elif self.cleanup_strategy == "relevance":
+                # For relevance-based cleanup, we would need semantic similarity scoring
+                # For now, fall back to FIFO behavior
+                logger.warning("Relevance-based cleanup not yet fully implemented, using FIFO fallback")
+                self.memory = self.memory[-self.max_size:]
+                logger.debug(f"Removed {excess} memories using FIFO fallback")
+
+            else:
+                logger.warning(f"Unknown cleanup strategy: {self.cleanup_strategy}, using FIFO fallback")
+                self.memory = self.memory[-self.max_size:]
+
+    def get_memory_stats(self) -> dict:
+        """
+        Returns statistics about memory usage.
+
+        Returns:
+            dict: Dictionary containing memory statistics including size, max_size, usage ratio, etc.
+        """
+        current_size = len(self.memory)
+        buffer_size = len(self.episodic_buffer) if hasattr(self, 'episodic_buffer') else 0
+
+        stats = {
+            'current_size': current_size,
+            'buffer_size': buffer_size,
+            'total_size': current_size + buffer_size,
+            'max_size': self.max_size,
+            'cleanup_strategy': self.cleanup_strategy,
+            'usage_ratio': (current_size / self.max_size) if self.max_size else None,
+            'is_bounded': self.max_size is not None,
+            'approaching_limit': (current_size / self.max_size >= self.warning_threshold) if self.max_size else False
+        }
+
+        return stats
+
     ######################################
     # General memory methods
     ######################################
     def _store(self, value: Any) -> None:
         """
-        Stores a value in memory.
+        Stores a value in memory, respecting size limits and cleanup strategies.
         """
         self.episodic_buffer.append(value)
+
+        # Check if we should warn about memory usage
+        # Note: This checks committed memory size, not buffer
+        self._check_memory_size_and_warn()
 
     def retrieve(self, first_n: int, last_n: int, include_omission_info:bool=True, item_type:str=None) -> list:
         """
