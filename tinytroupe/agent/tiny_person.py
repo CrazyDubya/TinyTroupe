@@ -18,7 +18,8 @@ from tinytroupe.utils import LLMChat  # Import LLMChat from the appropriate modu
 
 import tinytroupe.utils.llm
 
-# to protect from race conditions when running agents in parallel
+# Global lock for protecting shared display buffers across all agents
+# Used only for display-related operations that might share global buffers
 concurrent_agent_action_lock = threading.Lock()
 
 #######################################################################################################################
@@ -205,6 +206,15 @@ class TinyPerson(JsonSerializableRegistry):
                 'total_memories_consolidated': 0,
                 'average_consolidation_size': 0
             }
+
+        # Thread-safety: Instance-level locks for protecting agent-specific state
+        # This allows different agents to act in parallel while protecting individual state
+        if not hasattr(self, '_state_lock'):
+            self._state_lock = threading.RLock()  # Reentrant lock for nested acquisitions
+        if not hasattr(self, '_memory_lock'):
+            self._memory_lock = threading.RLock()  # Separate lock for memory operations
+        if not hasattr(self, '_consolidation_lock'):
+            self._consolidation_lock = threading.Lock()  # Lock for consolidation operations
 
         self._prompt_template_path = os.path.join(
             os.path.dirname(__file__), "prompts/tiny_person.mustache"
@@ -590,25 +600,27 @@ class TinyPerson(JsonSerializableRegistry):
                                     'simulation_timestamp': self.iso_datetime()})
 
             # All checks done, we can commit the action to memory.
-            self.store_in_memory({'role': role, 'content': content, 
-                                    'type': 'action', 
+            self.store_in_memory({'role': role, 'content': content,
+                                    'type': 'action',
                                     'simulation_timestamp': self.iso_datetime()})
-                
-            self._actions_buffer.append(action)
-            
-            if "cognitive_state" in content:
-                cognitive_state = content["cognitive_state"]
-                logger.debug(f"[{self.name}] Cognitive state: {cognitive_state}")
-                
-                self._update_cognitive_state(goals=cognitive_state.get("goals", None),
-                                             context=cognitive_state.get("context", None),
-                                             attention=cognitive_state.get("emotions", None),
-                                             emotions=cognitive_state.get("emotions", None))
-            
-            contents.append(content)          
+
+            # Thread-safe state modifications
+            with self._state_lock:
+                self._actions_buffer.append(action)
+
+                if "cognitive_state" in content:
+                    cognitive_state = content["cognitive_state"]
+                    logger.debug(f"[{self.name}] Cognitive state: {cognitive_state}")
+
+                    self._update_cognitive_state(goals=cognitive_state.get("goals", None),
+                                                 context=cognitive_state.get("context", None),
+                                                 attention=cognitive_state.get("emotions", None),
+                                                 emotions=cognitive_state.get("emotions", None))
+
+            contents.append(content)
             if utils.first_non_none(communication_display, TinyPerson.communication_display):
                 self._display_communication(role=role, content=content, kind='action', simplified=True, max_content_length=max_content_length)
-            
+
             #
             # Some actions induce an immediate stimulus or other side-effects. We need to process them here, by means of the mental faculties.
             #
@@ -643,10 +655,11 @@ class TinyPerson(JsonSerializableRegistry):
             ##                          'simulation_timestamp': self.iso_datetime()})
             ##
 
-            
 
-            # count the actions as this can be useful for taking decisions later
-            self.actions_count += 1             
+
+            # Thread-safe counter increment
+            with self._state_lock:
+                self.actions_count += 1             
             
 
         #
@@ -825,8 +838,9 @@ class TinyPerson(JsonSerializableRegistry):
 max_content_length=max_content_length,
             )
         
-        # count the stimuli as this can be useful for taking decisions later
-        self.stimuli_count += 1
+        # Thread-safe counter increment
+        with self._state_lock:
+            self.stimuli_count += 1
 
         return self  # allows easier chaining of methods
 
@@ -915,8 +929,10 @@ max_content_length=max_content_length,
     def move_to(self, location, context=[]):
         """
         Moves to a new location and updates its internal cognitive state.
+        Thread-safe: Uses state lock to protect location updates.
         """
-        self._mental_state["location"] = location
+        with self._state_lock:
+            self._mental_state["location"] = location
 
         # context must also be updated when moved, since we assume that context is dictated partly by location.
         self.change_context(context)
@@ -925,10 +941,12 @@ max_content_length=max_content_length,
     def change_context(self, context: list):
         """
         Changes the context and updates its internal cognitive state.
+        Thread-safe: Mental state protected by _update_cognitive_state.
         """
-        self._mental_state["context"] = {
-            "description": item for item in context
-        }
+        with self._state_lock:
+            self._mental_state["context"] = {
+                "description": item for item in context
+            }
 
         self._update_cognitive_state(context=context)
 
@@ -940,16 +958,18 @@ max_content_length=max_content_length,
     ):
         """
         Makes an agent accessible to this agent.
+        Thread-safe: Uses state lock to protect accessible agents list.
         """
-        if agent not in self._accessible_agents:
-            self._accessible_agents.append(agent)
-            self._mental_state["accessible_agents"].append(
-                {"name": agent.name, "relation_description": relation_description}
-            )
-        else:
-            logger.warning(
-                f"[{self.name}] Agent {agent.name} is already accessible to {self.name}."
-            )
+        with self._state_lock:
+            if agent not in self._accessible_agents:
+                self._accessible_agents.append(agent)
+                self._mental_state["accessible_agents"].append(
+                    {"name": agent.name, "relation_description": relation_description}
+                )
+            else:
+                logger.warning(
+                    f"[{self.name}] Agent {agent.name} is already accessible to {self.name}."
+                )
     @transactional()
     def make_agents_accessible(self, agents: list, relation_description: str = "An agent I can currently interact with."):
         """
@@ -962,21 +982,29 @@ max_content_length=max_content_length,
     def make_agent_inaccessible(self, agent: Self):
         """
         Makes an agent inaccessible to this agent.
+        Thread-safe: Uses state lock to protect accessible agents list.
         """
-        if agent in self._accessible_agents:
-            self._accessible_agents.remove(agent)
-        else:
-            logger.warning(
-                f"[{self.name}] Agent {agent.name} is already inaccessible to {self.name}."
-            )
+        with self._state_lock:
+            if agent in self._accessible_agents:
+                self._accessible_agents.remove(agent)
+                # Also remove from mental state
+                self._mental_state["accessible_agents"] = [
+                    a for a in self._mental_state["accessible_agents"] if a["name"] != agent.name
+                ]
+            else:
+                logger.warning(
+                    f"[{self.name}] Agent {agent.name} is already inaccessible to {self.name}."
+                )
 
     @transactional()
     def make_all_agents_inaccessible(self):
         """
         Makes all agents inaccessible to this agent.
+        Thread-safe: Uses state lock to protect accessible agents list.
         """
-        self._accessible_agents = []
-        self._mental_state["accessible_agents"] = []
+        with self._state_lock:
+            self._accessible_agents = []
+            self._mental_state["accessible_agents"] = []
 
     @property
     def accessible_agents(self):
@@ -994,34 +1022,36 @@ max_content_length=max_content_length,
     ):
         """
         Update the TinyPerson's cognitive state.
+        Thread-safe: Uses state lock to protect mental state modifications.
         """
 
-        # Update current datetime. The passage of time is controlled by the environment, if any.
-        if self.environment is not None and self.environment.current_datetime is not None:
-            self._mental_state["datetime"] = utils.pretty_datetime(self.environment.current_datetime)
+        with self._state_lock:
+            # Update current datetime. The passage of time is controlled by the environment, if any.
+            if self.environment is not None and self.environment.current_datetime is not None:
+                self._mental_state["datetime"] = utils.pretty_datetime(self.environment.current_datetime)
 
-        # update current goals
-        if goals is not None:
-            self._mental_state["goals"] = goals
+            # update current goals
+            if goals is not None:
+                self._mental_state["goals"] = goals
 
-        # update current context
-        if context is not None:
-            self._mental_state["context"] = context
+            # update current context
+            if context is not None:
+                self._mental_state["context"] = context
 
-        # update current attention
-        if attention is not None:
-            self._mental_state["attention"] = attention
+            # update current attention
+            if attention is not None:
+                self._mental_state["attention"] = attention
 
-        # update current emotions
-        if emotions is not None:
-            self._mental_state["emotions"] = emotions
-        
-        # update relevant memories for the current situation. These are memories that come to mind "spontaneously" when the agent is in a given context,
-        # so avoiding the need to actively trying to remember them.
-        current_memory_context = self.retrieve_relevant_memories_for_current_context()
-        self._mental_state["memory_context"] = current_memory_context
+            # update current emotions
+            if emotions is not None:
+                self._mental_state["emotions"] = emotions
 
-        self.reset_prompt()
+            # update relevant memories for the current situation. These are memories that come to mind "spontaneously" when the agent is in a given context,
+            # so avoiding the need to actively trying to remember them.
+            current_memory_context = self.retrieve_relevant_memories_for_current_context()
+            self._mental_state["memory_context"] = current_memory_context
+
+            self.reset_prompt()
         
 
     ###########################################################
@@ -1032,6 +1062,7 @@ max_content_length=max_content_length,
         """
         Stores a value in episodic memory and manages episode length.
         Automatically triggers consolidation if memory thresholds are reached.
+        Thread-safe: Uses memory lock to protect concurrent access.
 
         Args:
             value: The memory item to store (e.g., action, stimulus, thought)
@@ -1039,21 +1070,22 @@ max_content_length=max_content_length,
         Returns:
             None
         """
-        self.episodic_memory.store(value)
+        with self._memory_lock:
+            self.episodic_memory.store(value)
 
-        self._current_episode_event_count += 1
-        logger.debug(f"[{self.name}] Current episode event count: {self._current_episode_event_count}.")
+            self._current_episode_event_count += 1
+            logger.debug(f"[{self.name}] Current episode event count: {self._current_episode_event_count}.")
 
-        # Check if automatic consolidation should be triggered
-        if self.should_consolidate():
-            logger.info(f"[{self.name}] Automatic consolidation triggered at {self._current_episode_event_count} events.")
-            self.consolidate_episode_memories(force=True, is_automatic=True)
-            return  # Early return since consolidation already happened
+            # Check if automatic consolidation should be triggered
+            if self.should_consolidate():
+                logger.info(f"[{self.name}] Automatic consolidation triggered at {self._current_episode_event_count} events.")
+                self.consolidate_episode_memories(force=True, is_automatic=True)
+                return  # Early return since consolidation already happened
 
-        if self._current_episode_event_count >= self.MAX_EPISODE_LENGTH:
-            # commit the current episode to memory, if it is long enough
-            logger.warning(f"[{self.name}] Episode length exceeded {self.MAX_EPISODE_LENGTH} events. Committing episode to memory. Please check whether this was expected or not.")
-            self.consolidate_episode_memories()
+            if self._current_episode_event_count >= self.MAX_EPISODE_LENGTH:
+                # commit the current episode to memory, if it is long enough
+                logger.warning(f"[{self.name}] Episode length exceeded {self.MAX_EPISODE_LENGTH} events. Committing episode to memory. Please check whether this was expected or not.")
+                self.consolidate_episode_memories()
     
     def should_consolidate(self) -> bool:
         """
@@ -1091,6 +1123,7 @@ max_content_length=max_content_length,
     def consolidate_episode_memories(self, force: bool = False, is_automatic: bool = False) -> bool:
         """
         Applies all memory consolidation or transformation processes appropriate to the conclusion of one simulation episode.
+        Thread-safe: Uses consolidation lock to prevent concurrent consolidation on the same agent.
 
         Args:
             force: If True, bypass the minimum episode length check and consolidate anyway.
@@ -1100,14 +1133,18 @@ max_content_length=max_content_length,
             bool: True if memories were successfully consolidated, False otherwise.
         """
         import time
-        start_time = time.time()
 
-        # a minimum length of the episode is required to consolidate it, to avoid excessive fragments in the semantic memory
-        if force or self._current_episode_event_count > self.MIN_EPISODE_LENGTH:
-            logger.debug(f"[{self.name}] ***** Consolidating current episode memories into semantic memory *****")
+        # Use consolidation lock to prevent concurrent consolidation
+        # This ensures only one consolidation happens at a time per agent
+        with self._consolidation_lock:
+            start_time = time.time()
 
-            # Consolidate latest episodic memories into semantic memory
-            if config_manager.get("enable_memory_consolidation"):
+            # a minimum length of the episode is required to consolidate it, to avoid excessive fragments in the semantic memory
+            if force or self._current_episode_event_count > self.MIN_EPISODE_LENGTH:
+                logger.debug(f"[{self.name}] ***** Consolidating current episode memories into semantic memory *****")
+
+                # Consolidate latest episodic memories into semantic memory
+                if config_manager.get("enable_memory_consolidation"):
 
 
                     episodic_consolidator = EpisodicConsolidator()
@@ -1127,12 +1164,16 @@ max_content_length=max_content_length,
             else:
                 logger.warning(f"[{self.name}] Memory consolidation is disabled. Not consolidating current episode memories into semantic memory.")
 
-            # commit the current episode to episodic memory
-            self.episodic_memory.commit_episode()
-            self._current_episode_event_count = 0
-            logger.debug(f"[{self.name}] Current episode event count reset to 0 after consolidation.")
+                # commit the current episode to episodic memory
+                self.episodic_memory.commit_episode()
+                self._current_episode_event_count = 0
+                logger.debug(f"[{self.name}] Current episode event count reset to 0 after consolidation.")
 
-            # TODO reflections, optimizations, etc.
+                # TODO reflections, optimizations, etc.
+
+            return True
+        # If lock couldn't be acquired or episode too short, return False
+        return False
 
     def _update_consolidation_metrics(self, episode_size: int, is_automatic: bool, duration: float):
         """
