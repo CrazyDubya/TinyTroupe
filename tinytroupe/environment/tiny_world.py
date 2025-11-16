@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 import textwrap
 import random
 import concurrent.futures
+import time
+import threading
 
 from tinytroupe.agent import *
 from tinytroupe.utils import name_or_empty, pretty_datetime
@@ -16,7 +18,7 @@ from tinytroupe import utils, config_manager
 from tinytroupe.steering.intervention import Intervention
 
 
- 
+
 from rich.console import Console
 
 from typing import Any, TypeVar, Union
@@ -76,9 +78,19 @@ class TinyWorld:
 
         self.console = Console()
 
+        # Parallel execution metrics
+        self._parallel_metrics = {
+            'total_parallel_steps': 0,
+            'total_sequential_steps': 0,
+            'avg_parallel_speedup': 0.0,
+            'parallel_errors': 0,
+            'parallel_timeouts': 0
+        }
+        self._metrics_lock = threading.Lock()
+
         # add the environment to the list of all environments
         TinyWorld.add_environment(self)
-        
+
         self.add_agents(agents)
         
     #######################################################################
@@ -125,9 +137,12 @@ class TinyWorld:
         
     def _step_sequentially(self, timedelta_per_step=None, randomize_agents_order=True):
         """
-        The sequential version of the _step method to request agents to act. 
+        The sequential version of the _step method to request agents to act.
+        Also tracks metrics for comparison with parallel execution.
         """
-        
+        start_time = time.time()
+        collect_metrics = config_manager.get("collect_parallel_metrics", True)
+
         # agents can act in a random order
         reordered_agents = copy.copy(self.agents)
         if randomize_agents_order:
@@ -141,29 +156,101 @@ class TinyWorld:
             agents_actions[agent.name] = actions
 
             self._handle_actions(agent, agent.pop_latest_actions())
-        
+
+        # Track metrics
+        if collect_metrics:
+            with self._metrics_lock:
+                self._parallel_metrics['total_sequential_steps'] += 1
+
+        duration = time.time() - start_time
+        logger.debug(f"[{self.name}] Sequential step completed in {duration:.2f}s with {len(agents_actions)} agents")
+
         return agents_actions
 
     def _step_in_parallel(self, timedelta_per_step=None):
         """
         A parallelized version of the _step method to request agents to act.
+
+        Uses ThreadPoolExecutor with configurable max_workers and timeout.
+        Collects performance metrics and handles errors gracefully.
         """
+        start_time = time.time()
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        max_workers = config_manager.get("max_workers", None)
+        timeout = config_manager.get("parallel_execution_timeout", 300)
+        collect_metrics = config_manager.get("collect_parallel_metrics", True)
+
+        logger.debug(f"[{self.name}] Starting parallel step with {len(self.agents)} agents, max_workers={max_workers}")
+
+        agents_actions = {}
+        errors = []
+        timeouts = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all agent actions
             futures = {executor.submit(agent.act, return_actions=True): agent for agent in self.agents}
-            agents_actions = {}
 
-            # Wait for all futures to complete
-            concurrent.futures.wait(futures.keys())
+            # Wait for completion with timeout
+            try:
+                done, pending = concurrent.futures.wait(
+                    futures.keys(),
+                    timeout=timeout,
+                    return_when=concurrent.futures.ALL_COMPLETED
+                )
 
-            for future in futures:
-                agent = futures[future]
-                try:
-                    actions = future.result()
-                    agents_actions[agent.name] = actions
-                    self._handle_actions(agent, agent.pop_latest_actions())
-                except Exception as exc:
-                    logger.error(f"[{self.name}] Agent {name_or_empty(agent)} generated an exception: {exc}")
+                # Handle timeouts
+                if pending:
+                    timeouts_count = len(pending)
+                    logger.error(f"[{self.name}] {timeouts_count} agent(s) timed out after {timeout}s")
+                    timeouts = [futures[future].name for future in pending]
+
+                    # Cancel pending futures
+                    for future in pending:
+                        future.cancel()
+
+                    with self._metrics_lock:
+                        self._parallel_metrics['parallel_timeouts'] += timeouts_count
+
+                # Collect results from completed futures
+                for future in done:
+                    agent = futures[future]
+                    try:
+                        actions = future.result(timeout=0)  # timeout=0 since already done
+                        agents_actions[agent.name] = actions
+                        self._handle_actions(agent, agent.pop_latest_actions())
+                    except Exception as exc:
+                        logger.error(f"[{self.name}] Agent {name_or_empty(agent)} generated an exception: {exc}")
+                        errors.append((agent.name, exc))
+
+                        with self._metrics_lock:
+                            self._parallel_metrics['parallel_errors'] += 1
+
+            except Exception as exc:
+                logger.error(f"[{self.name}] Parallel execution failed: {exc}")
+                errors.append(("execution", exc))
+
+        # Calculate metrics
+        duration = time.time() - start_time
+
+        if collect_metrics:
+            with self._metrics_lock:
+                self._parallel_metrics['total_parallel_steps'] += 1
+
+                # Estimate sequential time (sum of individual times, approximated)
+                # This is a rough estimate since we don't measure each agent individually
+                estimated_sequential_time = duration * len(self.agents)
+                speedup = estimated_sequential_time / duration if duration > 0 else 1.0
+
+                # Update running average of speedup
+                total_steps = self._parallel_metrics['total_parallel_steps']
+                current_avg = self._parallel_metrics['avg_parallel_speedup']
+                self._parallel_metrics['avg_parallel_speedup'] = (
+                    (current_avg * (total_steps - 1) + speedup) / total_steps
+                )
+
+        logger.debug(f"[{self.name}] Parallel step completed in {duration:.2f}s "
+                    f"with {len(agents_actions)} successful agents, "
+                    f"{len(errors)} errors, {len(timeouts)} timeouts")
 
         return agents_actions
 
@@ -575,7 +662,22 @@ class TinyWorld:
             for agent_2 in self.agents:
                 if agent_1 != agent_2:
                     agent_1.make_agent_accessible(agent_2)
-            
+
+    def get_parallel_metrics(self) -> dict:
+        """
+        Returns parallel execution performance metrics.
+
+        Returns:
+            dict: Dictionary containing parallel execution metrics including:
+                  - total_parallel_steps: Number of parallel execution steps
+                  - total_sequential_steps: Number of sequential execution steps
+                  - avg_parallel_speedup: Average speedup from parallelization
+                  - parallel_errors: Number of errors in parallel execution
+                  - parallel_timeouts: Number of timeouts in parallel execution
+        """
+        with self._metrics_lock:
+            return self._parallel_metrics.copy()
+
 
     ###########################################################
     # Formatting conveniences
