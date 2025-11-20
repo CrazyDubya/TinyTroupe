@@ -90,6 +90,7 @@ class ConfigManager:
         
         # LOGLEVEL
         self._config[ConfigManager.LOGLEVEL_KEY] = config["Logging"].get("LOGLEVEL", "INFO").upper()
+        utils.set_loglevel(self._config[ConfigManager.LOGLEVEL_KEY])
 
         self._raw_config = config
     
