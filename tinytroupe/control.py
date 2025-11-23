@@ -17,6 +17,7 @@ import tinytroupe
 import tinytroupe.utils as utils
 from tinytroupe.utils.serialization import compute_function_call_hash, compute_fallback_hash
 from tinytroupe import config_manager
+from tinytroupe.caching import SemanticCache, create_text_representation
 
 import uuid
 
@@ -95,6 +96,20 @@ class Simulation:
         # Cache analytics
         if self.collect_cache_metrics:
             self._cache_metrics_history = []  # List of (timestamp, metrics_dict)
+
+        # Semantic cache (optional, experimental)
+        self.enable_semantic_cache = config_manager.get("enable_semantic_cache", False)
+        if self.enable_semantic_cache:
+            similarity_threshold = config_manager.get("semantic_similarity_threshold", 0.85)
+            max_semantic_entries = config_manager.get("max_semantic_cache_entries", 1000)
+            self.semantic_cache = SemanticCache(
+                similarity_threshold=similarity_threshold,
+                max_semantic_entries=max_semantic_entries
+            )
+            # Embedding function will be set later if available
+            logger.info(f"Semantic cache enabled (threshold={similarity_threshold}, max_entries={max_semantic_entries})")
+        else:
+            self.semantic_cache = None
 
         # Execution chain mechanism.
         #
@@ -568,6 +583,11 @@ class Simulation:
             'eviction_policy': self.cache_eviction_policy,
             'compression_enabled': self.enable_cache_compression
         }
+
+        # Add semantic cache metrics if enabled
+        if self.semantic_cache:
+            semantic_metrics = self.semantic_cache.get_metrics()
+            metrics.update(semantic_metrics)
 
         # Add to history if collecting metrics
         if self.collect_cache_metrics:
