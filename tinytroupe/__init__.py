@@ -88,8 +88,10 @@ class ConfigManager:
         self._config["action_generator_continue_on_failure"] = config["ActionGenerator"].getboolean("CONTINUE_ON_FAILURE", True)
         self._config["action_generator_quality_threshold"] = config["ActionGenerator"].getint("QUALITY_THRESHOLD", 2)
         
-        # LOGLEVEL
+        # Logging
         self._config[ConfigManager.LOGLEVEL_KEY] = config["Logging"].get("LOGLEVEL", "INFO").upper()
+        self._config["llm_telemetry_enabled"] = config["Logging"].getboolean("LLM_TELEMETRY_ENABLED", False)
+        self._config["llm_telemetry_path"] = config["Logging"].get("LLM_TELEMETRY_PATH", "logs/llm_telemetry.jsonl")
 
         self._raw_config = config
     

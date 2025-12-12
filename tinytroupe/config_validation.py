@@ -141,9 +141,11 @@ class ActionGeneratorConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     """Logging configuration validation."""
-    
+
     loglevel: str = Field(default="ERROR", description="Logging level")
-    
+    llm_telemetry_enabled: bool = Field(default=False, description="Emit structured telemetry for LLM calls")
+    llm_telemetry_path: str = Field(default="logs/llm_telemetry.jsonl", description="Path to append LLM telemetry JSONL events")
+
     @validator('loglevel')
     def validate_loglevel(cls, v):
         valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
