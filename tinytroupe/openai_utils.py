@@ -1,10 +1,13 @@
+import json
 import os
 import openai
 from openai import OpenAI, AzureOpenAI
+from datetime import datetime, timezone
 import time
 import pickle
 import logging
 import configparser
+from pathlib import Path
 from typing import Union
 
 
@@ -13,6 +16,7 @@ from tinytroupe import utils
 from tinytroupe.control import transactional
 from tinytroupe import default
 from tinytroupe import config_manager
+from tinytroupe.utils.backend_presets import warn_missing_env_vars
 
 logger = logging.getLogger("tinytroupe")
 
@@ -128,6 +132,12 @@ class OpenAIClient:
         # setup the OpenAI configurations for this client.
         self._setup_from_config()
 
+        # Optional moderation check before issuing the call
+        moderation_result = self._moderate_messages(current_messages, model=model)
+        if moderation_result and moderation_result.get("flagged") and config_manager.get("moderation_action", "warn") == "block":
+            logger.warning("Moderation flagged content; returning block message instead of calling the model.")
+            return utils.sanitize_dict(self._build_blocked_message(moderation_result))
+
         # dedent the messages (field 'content' only) if needed (using textwrap)
         if dedent_messages:
             for message in current_messages:
@@ -188,6 +198,17 @@ class OpenAIClient:
                 logger.debug(
                     f"Got response in {end_time - start_time:.2f} seconds after {i} attempts.")
 
+                self._emit_telemetry(
+                    self._build_telemetry_record(
+                        model=model,
+                        messages=current_messages,
+                        response=response,
+                        attempts=i,
+                        latency_seconds=end_time - start_time,
+                        cached=self.cache_api_calls and (cache_key in getattr(self, "api_cache", {})),
+                    )
+                )
+
                 if enable_pydantic_model_return:
                     return utils.to_pydantic_or_sanitized_dict(self._raw_model_response_extractor(response), model=response_format)
                 else:
@@ -221,6 +242,45 @@ class OpenAIClient:
                 aux_exponential_backoff()
 
         logger.error(f"Failed to get response after {max_attempts} attempts.")
+        return None
+
+    def _moderate_messages(self, messages: list, model: str | None = None):
+        """Run OpenAI moderation if enabled."""
+        if not config_manager.get("moderation_enabled", False):
+            return None
+
+        if config["OpenAI"].get("API_TYPE", "openai") != "openai":
+            return None
+
+        try:
+            moderation_input = "\n\n".join([
+                str(msg.get("content", ""))
+                for msg in messages
+                if isinstance(msg, dict) and "content" in msg
+            ])
+
+            moderation_model = config_manager.get("moderation_model", "omni-moderation-latest")
+            moderation_result = self.client.moderations.create(
+                model=moderation_model,
+                input=moderation_input,
+            )
+
+            result = moderation_result.results[0]
+            if getattr(result, "flagged", False):
+                logger.warning(
+                    "Moderation flagged content (model=%s): %s",
+                    moderation_model,
+                    getattr(result, "categories", {}),
+                )
+                return {
+                    "flagged": True,
+                    "categories": getattr(result, "categories", {}),
+                    "category_scores": getattr(result, "category_scores", {}),
+                    "model": moderation_model,
+                }
+        except Exception as exc:
+            logger.warning("Moderation check failed; proceeding without blocking. Error: %s", exc)
+
         return None
     
     def _raw_model_call(self, model, chat_api_params):
@@ -382,6 +442,49 @@ class OpenAIClient:
         """
         return response.data[0].embedding
 
+    def _build_telemetry_record(self, *, model: str, messages: list, response, attempts: int, latency_seconds: float, cached: bool):
+        usage = getattr(response, "usage", None)
+        usage_payload = None
+
+        if usage:
+            try:
+                usage_payload = usage.model_dump()
+            except AttributeError:
+                usage_payload = usage.__dict__ if hasattr(usage, "__dict__") else str(usage)
+
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "api_type": config["OpenAI"].get("API_TYPE", "openai"),
+            "model": model,
+            "attempts": attempts,
+            "latency_seconds": round(latency_seconds, 3),
+            "cached": cached,
+            "message_count": len(messages),
+            "prompt_token_estimate": self._count_tokens(messages, model),
+            "usage": usage_payload,
+        }
+
+    def _emit_telemetry(self, telemetry_payload: dict) -> None:
+        if not config_manager.get("llm_telemetry_enabled", False):
+            return
+
+        try:
+            telemetry_path = Path(config_manager.get("llm_telemetry_path", "logs/llm_telemetry.jsonl"))
+            telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+            with telemetry_path.open("a", encoding="utf-8", errors="replace") as log_file:
+                log_file.write(json.dumps(telemetry_payload, ensure_ascii=False))
+                log_file.write("\n")
+        except Exception as exc:
+            logger.debug("Failed to emit telemetry: %s", exc)
+
+    def _build_blocked_message(self, moderation_result: dict) -> dict:
+        """Return a safe stub message when moderation blocks content."""
+        return {
+            "role": "assistant",
+            "content": config_manager.get("moderation_block_message", "[BLOCKED BY MODERATION]"),
+            "moderation": moderation_result,
+        }
+
 class AzureClient(OpenAIClient):
 
     def __init__(self, cache_api_calls=default["cache_api_calls"], cache_file_name=default["cache_file_name"]) -> None:
@@ -492,8 +595,9 @@ def client():
     Returns the client for the configured API type.
     """
     api_type = config["OpenAI"]["API_TYPE"] if _api_type_override is None else _api_type_override
-    
+
     logger.debug(f"Using  API type {api_type}.")
+    warn_missing_env_vars(api_type)
     return _get_client_for_api_type(api_type)
 
 
