@@ -87,9 +87,22 @@ class ConfigManager:
 
         self._config["action_generator_continue_on_failure"] = config["ActionGenerator"].getboolean("CONTINUE_ON_FAILURE", True)
         self._config["action_generator_quality_threshold"] = config["ActionGenerator"].getint("QUALITY_THRESHOLD", 2)
-        
-        # LOGLEVEL
+
+        # Logging
         self._config[ConfigManager.LOGLEVEL_KEY] = config["Logging"].get("LOGLEVEL", "INFO").upper()
+        self._config["llm_telemetry_enabled"] = config["Logging"].getboolean("LLM_TELEMETRY_ENABLED", False)
+        self._config["llm_telemetry_path"] = config["Logging"].get("LLM_TELEMETRY_PATH", "logs/llm_telemetry.jsonl")
+
+        # Moderation
+        if isinstance(config, configparser.ConfigParser) and config.has_section("Moderation"):
+            moderation_section = config["Moderation"]
+        else:
+            moderation_section = {}
+
+        self._config["moderation_enabled"] = getattr(moderation_section, "getboolean", lambda *_, **__: False)("ENABLE_MODERATION", False)
+        self._config["moderation_action"] = getattr(moderation_section, "get", lambda *_, **__: "warn")("MODERATION_ACTION", "warn")
+        self._config["moderation_model"] = getattr(moderation_section, "get", lambda *_, **__: "omni-moderation-latest")("MODERATION_MODEL", "omni-moderation-latest")
+        self._config["moderation_block_message"] = getattr(moderation_section, "get", lambda *_, **__: "[BLOCKED BY MODERATION]")("MODERATION_BLOCK_MESSAGE", "[BLOCKED BY MODERATION]")
 
         self._raw_config = config
     
