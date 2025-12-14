@@ -154,14 +154,31 @@ class LoggingConfig(BaseModel):
         return v.upper()
 
 
+class ModerationConfig(BaseModel):
+    """Content moderation configuration."""
+
+    enable_moderation: bool = Field(default=False, description="Toggle OpenAI moderation checks")
+    moderation_action: str = Field(default="warn", description="Action on flagged content: warn or block")
+    moderation_model: str = Field(default="omni-moderation-latest", description="Moderation model to call")
+    moderation_block_message: str = Field(default="[BLOCKED BY MODERATION]", description="Message returned when blocking")
+
+    @validator('moderation_action')
+    def validate_moderation_action(cls, v):
+        allowed = ['warn', 'block']
+        if v not in allowed:
+            raise ValueError(f"moderation_action must be one of {allowed}, got '{v}'")
+        return v
+
+
 class TinyTroupeConfig(BaseModel):
     """Complete TinyTroupe configuration validation."""
-    
+
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     cognition: CognitionConfig = Field(default_factory=CognitionConfig)
     action_generator: ActionGeneratorConfig = Field(default_factory=ActionGeneratorConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    moderation: ModerationConfig = Field(default_factory=ModerationConfig)
     
     class Config:
         extra = 'forbid'  # Don't allow extra fields
@@ -188,10 +205,11 @@ def validate_config_dict(config_dict: Dict[str, Any]) -> TinyTroupeConfig:
         # Map flat config sections to nested structure
         section_mapping = {
             'OpenAI': 'openai',
-            'Simulation': 'simulation', 
+            'Simulation': 'simulation',
             'Cognition': 'cognition',
             'ActionGenerator': 'action_generator',
-            'Logging': 'logging'
+            'Logging': 'logging',
+            'Moderation': 'moderation'
         }
         
         for section_name, section_data in config_dict.items():
