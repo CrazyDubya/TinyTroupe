@@ -122,6 +122,41 @@ After running a simulation, we can extract the results in a machine-readable man
 You can find other examples in the [examples/](./examples/) folder.
 
 
+## API Dashboard (experimental)
+
+TinyTroupe now ships with an optional FastAPI-based dashboard that lets you load
+agents, inspect their personas, and interact with them from a browser. The GUI
+is backed by the same REST endpoints, so you can also orchestrate simulations
+from other tools.
+
+To start the dashboard after installing the package:
+
+```bash
+python -m tinytroupe.ui.api_dashboard
+```
+
+This launches a local server on <http://localhost:8000>. The landing page shows
+three panes: one to load the bundled examples or register your own personas,
+one to review every active agent, and one to chat with the currently selected
+agent. The UI calls a few REST endpoints that are automatically exposed:
+
+- `GET /api/agents` – list active agents along with high-level persona and
+  memory metadata.
+- `POST /api/agents` – register a new agent from either a JSON payload or from a
+  path to a `.agent.json` specification file.
+- `POST /api/agents/load_examples` – bulk load every agent found under
+  `examples/agents` (or a custom folder of your choice).
+- `POST /api/agents/{name}/message` – deliver a message to an agent and receive
+  its next action.
+- `GET /api/agents/{name}/persona` – inspect the persona data backing the agent.
+- `GET /api/agents/{name}/conversation` – fetch the full chat log maintained by
+  the dashboard.
+
+Because the dashboard is implemented in `tinytroupe.ui.api_dashboard`, you can
+also embed it inside existing applications by importing `create_dashboard_app`
+or `TinyTroupeDashboard` directly.
+
+
 ## Pre-requisites
 
 To run the library, you need:
