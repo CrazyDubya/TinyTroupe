@@ -518,6 +518,7 @@ ARCHITECTURE_CHANGES
 
 | Version | Date | Changes |
 |---------|------|---------|
+| _Future entries: Document major revisions, phase completions, scope changes, etc._ | | |
 | 1.0 | 2025-11-16 | Initial creation with complete expansion prep |
 
 ---
