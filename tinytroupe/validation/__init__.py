@@ -8,4 +8,15 @@ from tinytroupe import default
 ###########################################################################
 from tinytroupe.validation.tiny_person_validator import TinyPersonValidator
 from tinytroupe.validation.propositions import *
-from tinytroupe.validation.simulation_validator import SimulationExperimentEmpiricalValidator, SimulationExperimentDataset, SimulationExperimentEmpiricalValidationResult, validate_simulation_experiment_empirically
+from tinytroupe.validation.simulation_validator import (
+    SimulationExperimentEmpiricalValidator,
+    SimulationExperimentDataset,
+    SimulationExperimentEmpiricalValidationResult,
+    validate_simulation_experiment_empirically,
+)
+from tinytroupe.validation.preflight import (
+    ValidationIssue,
+    assert_simulation_ready,
+    validate_personas,
+    validate_world,
+)
