@@ -8,9 +8,16 @@ import hashlib
 import tempfile
 import threading
 import traceback
+import zlib
+import sys
+from collections import OrderedDict
+from datetime import datetime
 
 import tinytroupe
 import tinytroupe.utils as utils
+from tinytroupe.utils.serialization import compute_function_call_hash, compute_fallback_hash
+from tinytroupe import config_manager
+from tinytroupe.caching import SemanticCache, create_text_representation
 
 import uuid
 
@@ -57,7 +64,7 @@ class Simulation:
         self._under_parallel_transactions = False
 
         # Cache chain mechanism.
-        # 
+        #
         # stores a list of simulation states.
         # Each state is a tuple (prev_node_hash, event_hash, event_output, state), where prev_node_hash is a hash of the previous node in this chain,
         # if any, event_hash is a hash of the event that triggered the transition to this state, if any, event_output is the output of the event,
@@ -66,14 +73,48 @@ class Simulation:
             self.cached_trace = []
         else:
             self.cached_trace = cached_trace
-        
+
+        # Cache management settings
+        self.max_cache_size = config_manager.get("max_cache_size", 10000)
+        self.cache_eviction_policy = config_manager.get("cache_eviction_policy", "lru")
+        self.cache_warning_threshold = config_manager.get("cache_warning_threshold", 0.8)
+        self.enable_cache_compression = config_manager.get("enable_cache_compression", False)
+        self.cache_compression_threshold = config_manager.get("cache_compression_threshold", 10000)
+        self.collect_cache_metrics = config_manager.get("collect_cache_metrics", True)
+
+        # LRU tracking: maps cache index to last access time
+        self._cache_access_order = OrderedDict()  # {index: access_time}
+        self._cache_access_lock = threading.Lock()
+
+        # Cache metrics
         self.cache_misses = 0
         self.cache_hits = 0
+        self.cache_evictions = 0
+        self.cache_compressions = 0
+        self.cache_size_bytes = 0
+
+        # Cache analytics
+        if self.collect_cache_metrics:
+            self._cache_metrics_history = []  # List of (timestamp, metrics_dict)
+
+        # Semantic cache (optional, experimental)
+        self.enable_semantic_cache = config_manager.get("enable_semantic_cache", False)
+        if self.enable_semantic_cache:
+            similarity_threshold = config_manager.get("semantic_similarity_threshold", 0.85)
+            max_semantic_entries = config_manager.get("max_semantic_cache_entries", 1000)
+            self.semantic_cache = SemanticCache(
+                similarity_threshold=similarity_threshold,
+                max_semantic_entries=max_semantic_entries
+            )
+            # Embedding function will be set later if available
+            logger.info(f"Semantic cache enabled (threshold={similarity_threshold}, max_entries={max_semantic_entries})")
+        else:
+            self.semantic_cache = None
 
         # Execution chain mechanism.
         #
-        # The actual, current, execution trace. Each state is a tuple (prev_node_hash, event_hash, state), where prev_node_hash is a hash 
-        # of the previous node in this chain, if any, event_hash is a hash of the event that triggered the transition to this state, if any, 
+        # The actual, current, execution trace. Each state is a tuple (prev_node_hash, event_hash, state), where prev_node_hash is a hash
+        # of the previous node in this chain, if any, event_hash is a hash of the event that triggered the transition to this state, if any,
         # event_output is the output of the event, if any, and state is the actual complete state that resulted.
         self.execution_trace = []
 
@@ -183,50 +224,20 @@ class Simulation:
 
     def _function_call_hash(self, function_name, *args, **kwargs) -> str:
         """
-        Computes a stable hash for the given function call using pickle and SHA256.
+        Computes a stable hash for the given function call using deterministic serialization.
+
+        Uses the enhanced serialization utilities from tinytroupe.utils.serialization
+        for robust, canonical hash computation. Supports custom serializers for
+        complex objects and provides graceful fallback for unpickleable objects.
         """
-
         try:
-            # Create a canonical representation of the arguments
-            # For dictionaries, ensure sorted order for consistent pickling
-            # This is a shallow sort; deep sort might be needed for complex nested dicts
-            # if their str/repr changes based on internal dict order.
-            # However, pickle itself is generally good with dict key order.
-
-            # A more robust way to handle kwargs order for pickling consistency
-            # is to convert them to a sorted tuple of items.
-            # We need a deep canonical representation.
-
-            def make_canonical(data):
-                if isinstance(data, dict):
-                    return tuple(sorted((k, make_canonical(v)) for k, v in data.items()))
-                elif isinstance(data, list) or isinstance(data, tuple):
-                    return tuple(make_canonical(elem) for elem in data)
-                elif isinstance(data, set):
-                    return tuple(sorted(make_canonical(elem) for elem in data))
-                # Note: Basic types (int, str, float, bool, None) are returned as is.
-                # Custom objects are returned as is; pickle will handle their __getstate__ or attributes.
-                return data
-
-            canonical_args = make_canonical(args)
-            # Sort kwargs by key, and canonicalize values
-            canonical_kwargs = tuple(sorted((k, make_canonical(v)) for k, v in kwargs.items()))
-
-            representation = (function_name, canonical_args, canonical_kwargs)
-            pickled_representation = pickle.dumps(representation, protocol=pickle.HIGHEST_PROTOCOL)
-            event_hash = hashlib.sha256(pickled_representation).hexdigest()
-            return event_hash
+            # Use the new serialization utility for deterministic hashing
+            return compute_function_call_hash(function_name, *args, **kwargs)
         except Exception as e:
-            # Simplified error logging to avoid issues with formatting args/kwargs if they are problematic
-            logger.error(f"Error pickling/hashing event for function {function_name}: {e}")
-            # Fallback to string representation if pickling fails, though this is less reliable.
-            # This might happen if args/kwargs contain unpickleable objects.
-            # A truly robust solution might require making those objects pickleable or using a custom serializer.
-            event_str = str((function_name, args, kwargs)) # args and kwargs are still used here for fallback key
-            logger.debug(f"About to log fallback warning for {function_name}") # DEBUG LOG
-            logger.warning(f"FALLBACK_CACHE_KEY_USED for {function_name}.") # Simplified warning
-            logger.debug(f"Logged fallback warning for {function_name}") # DEBUG LOG
-            return hashlib.sha256(event_str.encode('utf-8', 'surrogatepass')).hexdigest()
+            # Fallback to the fallback hash if serialization fails
+            logger.error(f"Error computing hash for function {function_name}: {e}")
+            logger.warning(f"FALLBACK_CACHE_KEY_USED for {function_name}.")
+            return compute_fallback_hash(function_name, args, kwargs)
 
 
     def _skip_execution_with_cache(self):
@@ -234,8 +245,13 @@ class Simulation:
         Skips the current execution, assuming there's a cached state at the same position.
         """
         assert len(self.cached_trace) > self._execution_trace_position() + 1, "There's no cached state at the current execution position."
-        
-        self.execution_trace.append(self.cached_trace[self._execution_trace_position() + 1])
+
+        cache_index = self._execution_trace_position() + 1
+
+        # Record cache access for LRU tracking
+        self._record_cache_access(cache_index)
+
+        self.execution_trace.append(self.cached_trace[cache_index])
     
     def _is_transaction_event_cached(self, event_hash, parallel=False) -> bool:
         """
@@ -345,7 +361,261 @@ class Simulation:
 
 
         self.has_unsaved_cache_changes = True
-    
+
+        # Check cache size and evict if necessary
+        self._manage_cache_size()
+
+    ###################################################################################################
+    # Cache management methods (LRU, compression, analytics)
+    ###################################################################################################
+
+    def _manage_cache_size(self):
+        """
+        Manages cache size by evicting entries when limit is reached.
+        """
+        if not self.max_cache_size or self.max_cache_size <= 0:
+            return  # Unbounded cache
+
+        cache_size = len(self.cached_trace)
+
+        # Check if eviction is needed
+        if cache_size > self.max_cache_size:
+            num_to_evict = cache_size - self.max_cache_size
+            logger.debug(f"Cache size ({cache_size}) exceeds limit ({self.max_cache_size}). Evicting {num_to_evict} entries.")
+            self._evict_cache_entries(num_to_evict)
+
+        # Check for warning threshold
+        elif cache_size >= self.max_cache_size * self.cache_warning_threshold:
+            usage_ratio = cache_size / self.max_cache_size
+            logger.warning(f"Cache usage at {usage_ratio:.1%} ({cache_size}/{self.max_cache_size}). "
+                          f"Approaching limit. Consider increasing MAX_CACHE_SIZE or enabling eviction.")
+
+    def _evict_cache_entries(self, num_to_evict: int):
+        """
+        Evicts cache entries based on configured eviction policy.
+
+        Args:
+            num_to_evict: Number of entries to evict
+        """
+        if num_to_evict <= 0:
+            return
+
+        with self._cache_access_lock:
+            if self.cache_eviction_policy == "lru":
+                # Evict least recently used entries
+                # _cache_access_order is an OrderedDict with oldest access first
+                indices_to_remove = []
+
+                # Find LRU entries (those not in access order are considered least recent)
+                all_indices = set(range(len(self.cached_trace)))
+                accessed_indices = set(self._cache_access_order.keys())
+                unaccessed_indices = all_indices - accessed_indices
+
+                # First remove unaccessed entries
+                indices_to_remove.extend(sorted(unaccessed_indices)[:num_to_evict])
+
+                # If need more, remove from oldest accessed
+                if len(indices_to_remove) < num_to_evict:
+                    remaining = num_to_evict - len(indices_to_remove)
+                    lru_indices = list(self._cache_access_order.keys())[:remaining]
+                    indices_to_remove.extend(lru_indices)
+
+            elif self.cache_eviction_policy == "fifo":
+                # Evict oldest entries (beginning of list)
+                indices_to_remove = list(range(num_to_evict))
+
+            elif self.cache_eviction_policy == "size":
+                # Evict largest entries
+                entry_sizes = []
+                for i, entry in enumerate(self.cached_trace):
+                    try:
+                        size = len(pickle.dumps(entry))
+                        entry_sizes.append((i, size))
+                    except Exception:
+                        entry_sizes.append((i, 0))
+
+                # Sort by size descending
+                entry_sizes.sort(key=lambda x: x[1], reverse=True)
+                indices_to_remove = [idx for idx, _ in entry_sizes[:num_to_evict]]
+
+            else:
+                logger.warning(f"Unknown cache eviction policy: {self.cache_eviction_policy}. Using FIFO.")
+                indices_to_remove = list(range(num_to_evict))
+
+            # Remove entries (in reverse order to preserve indices)
+            for idx in sorted(indices_to_remove, reverse=True):
+                if idx < len(self.cached_trace):
+                    del self.cached_trace[idx]
+                    self.cache_evictions += 1
+
+                    # Remove from access order tracking
+                    if idx in self._cache_access_order:
+                        del self._cache_access_order[idx]
+
+            # Rebuild access order with updated indices
+            new_access_order = OrderedDict()
+            for old_idx, access_time in self._cache_access_order.items():
+                # Adjust index based on how many items before it were removed
+                num_removed_before = sum(1 for i in indices_to_remove if i < old_idx)
+                new_idx = old_idx - num_removed_before
+                if 0 <= new_idx < len(self.cached_trace):
+                    new_access_order[new_idx] = access_time
+
+            self._cache_access_order = new_access_order
+
+            logger.debug(f"Evicted {len(indices_to_remove)} cache entries. New size: {len(self.cached_trace)}")
+
+    def _record_cache_access(self, cache_index: int):
+        """
+        Records access to a cache entry for LRU tracking.
+
+        Args:
+            cache_index: Index of the accessed cache entry
+        """
+        if not self.cache_eviction_policy == "lru":
+            return  # Only track for LRU policy
+
+        with self._cache_access_lock:
+            # Move to end (most recently used)
+            if cache_index in self._cache_access_order:
+                del self._cache_access_order[cache_index]
+
+            self._cache_access_order[cache_index] = datetime.now()
+
+            # Keep access order dict from growing too large
+            # Only keep track of max_cache_size entries
+            if len(self._cache_access_order) > self.max_cache_size * 1.5:
+                # Remove oldest entries from tracking
+                items_to_remove = list(self._cache_access_order.keys())[:-self.max_cache_size]
+                for key in items_to_remove:
+                    del self._cache_access_order[key]
+
+    def _compress_cache_entry(self, entry: tuple) -> tuple:
+        """
+        Compresses a cache entry if it exceeds the compression threshold.
+
+        Args:
+            entry: Cache entry tuple (prev_hash, event_hash, output, state)
+
+        Returns:
+            Compressed entry or original if compression not beneficial
+        """
+        if not self.enable_cache_compression:
+            return entry
+
+        try:
+            # Serialize entry to check size
+            serialized = pickle.dumps(entry)
+            original_size = len(serialized)
+
+            if original_size < self.cache_compression_threshold:
+                return entry  # Too small to compress
+
+            # Compress
+            compressed = zlib.compress(serialized, level=6)
+            compressed_size = len(compressed)
+
+            if compressed_size < original_size * 0.9:  # At least 10% savings
+                self.cache_compressions += 1
+                logger.debug(f"Compressed cache entry: {original_size} -> {compressed_size} bytes "
+                           f"({(1 - compressed_size/original_size)*100:.1f}% reduction)")
+                return ("__compressed__", compressed)
+            else:
+                return entry
+
+        except Exception as e:
+            logger.warning(f"Cache compression failed: {e}")
+            return entry
+
+    def _decompress_cache_entry(self, entry: tuple) -> tuple:
+        """
+        Decompresses a cache entry if it was compressed.
+
+        Args:
+            entry: Potentially compressed cache entry
+
+        Returns:
+            Decompressed entry
+        """
+        try:
+            if isinstance(entry, tuple) and len(entry) == 2 and entry[0] == "__compressed__":
+                decompressed = zlib.decompress(entry[1])
+                return pickle.loads(decompressed)
+            else:
+                return entry
+        except Exception as e:
+            logger.error(f"Cache decompression failed: {e}")
+            return entry
+
+    def get_cache_metrics(self) -> dict:
+        """
+        Returns comprehensive cache metrics.
+
+        Returns:
+            Dictionary with cache statistics including:
+            - hits, misses, evictions
+            - size (entries and bytes)
+            - hit rate
+            - compression stats
+        """
+        cache_size = len(self.cached_trace)
+
+        # Calculate cache size in bytes
+        try:
+            cache_size_bytes = sum(len(pickle.dumps(entry)) for entry in self.cached_trace)
+        except Exception:
+            cache_size_bytes = 0
+
+        total_accesses = self.cache_hits + self.cache_misses
+        hit_rate = self.cache_hits / total_accesses if total_accesses > 0 else 0.0
+
+        metrics = {
+            'cache_hits': self.cache_hits,
+            'cache_misses': self.cache_misses,
+            'cache_evictions': self.cache_evictions,
+            'cache_compressions': self.cache_compressions,
+            'cache_size_entries': cache_size,
+            'cache_size_bytes': cache_size_bytes,
+            'cache_size_mb': cache_size_bytes / (1024 * 1024),
+            'max_cache_size': self.max_cache_size,
+            'cache_usage_ratio': cache_size / self.max_cache_size if self.max_cache_size else 0.0,
+            'hit_rate': hit_rate,
+            'eviction_policy': self.cache_eviction_policy,
+            'compression_enabled': self.enable_cache_compression
+        }
+
+        # Add semantic cache metrics if enabled
+        if self.semantic_cache:
+            semantic_metrics = self.semantic_cache.get_metrics()
+            metrics.update(semantic_metrics)
+
+        # Add to history if collecting metrics
+        if self.collect_cache_metrics:
+            self._cache_metrics_history.append((datetime.now(), metrics.copy()))
+
+            # Keep history bounded (last 1000 samples)
+            if len(self._cache_metrics_history) > 1000:
+                self._cache_metrics_history = self._cache_metrics_history[-1000:]
+
+        return metrics
+
+    def get_cache_metrics_history(self) -> list:
+        """
+        Returns historical cache metrics.
+
+        Returns:
+            List of (timestamp, metrics_dict) tuples
+        """
+        if not self.collect_cache_metrics:
+            logger.warning("Cache metrics collection is disabled. Enable COLLECT_CACHE_METRICS in config.")
+            return []
+
+        return self._cache_metrics_history.copy()
+
+    ###################################################################################################
+    # Cache file operations
+    ###################################################################################################
+
     def _load_cache_file(self, cache_path:str):
         """
         Loads the cache file from the given path.
@@ -860,5 +1130,17 @@ def cache_misses(id="default"):
     Returns the number of cache misses.
     """
     return _simulation(id).cache_misses
-    
+
+def cache_metrics(id="default"):
+    """
+    Returns comprehensive cache metrics.
+    """
+    return _simulation(id).get_cache_metrics()
+
+def cache_metrics_history(id="default"):
+    """
+    Returns historical cache metrics.
+    """
+    return _simulation(id).get_cache_metrics_history()
+
 reset() # initialize the control state
