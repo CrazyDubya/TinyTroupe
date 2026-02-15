@@ -40,3 +40,10 @@
 - Documented prison as upstream baseline (no unique files; merged via sync-upstream)
 - Created `EXPERIMENTS_INDEX.md` and `experiment_archives/prison/README.md`
 - **main** is the canonical branch
+- Second commit: added CommunityRallyTool.py, UnemployedYouth.agent.json to examples/aethelburg_scenario
+
+### Next steps completed (2026-02-15)
+
+1. **Pushed main** to origin
+2. **Removed redundant iCloud clones:** github_other/TinyTroupe, tinyexperiment/tinytroupe, prison/TinyTroupe
+3. **Experiments reference:** README now links to EXPERIMENTS_INDEX.md; use it as the reference for what's where

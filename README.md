@@ -33,6 +33,7 @@ We are releasing *TinyTroupe* at a relatively early stage, with considerable wor
 
 - 📰 [Latest News](#latest-news)
 - 📚 [Examples](#examples)
+- 🧪 [Experiments Index](#experiments-index)
 - 🛠️ [Pre-requisites](#pre-requisites)
 - 📥 [Installation](#installation)
 - 🌟 [Principles](#principles)
@@ -121,6 +122,9 @@ After running a simulation, we can extract the results in a machine-readable man
 
 You can find other examples in the [examples/](./examples/) folder.
 
+### Experiments Index
+
+**[EXPERIMENTS_INDEX.md](./EXPERIMENTS_INDEX.md)** is the reference for consolidated experiments, simulation scripts, and provenance from multiple clones. Use it to locate TheatreCompany, aethelburg_scenario, epic simulations, ROVODEV docs, and more.
 
 ## API Dashboard (experimental)
 
