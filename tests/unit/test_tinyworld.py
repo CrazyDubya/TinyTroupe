@@ -21,6 +21,7 @@ import os # For test_save_specification
 # Imports for new tests
 from unittest.mock import MagicMock, patch
 
+@pytest.mark.core
 def test_run(setup, focus_group_world):
 
     # empty world
@@ -47,6 +48,7 @@ def test_run(setup, focus_group_world):
             # TODO stimulus integrity check?
         
 
+@pytest.mark.core
 def test_broadcast(setup, focus_group_world):
 
     world = focus_group_world
@@ -73,6 +75,7 @@ def test_broadcast(setup, focus_group_world):
                     assert proposition_holds(action_content + " - The message relates to baby products, parenting, or product brainstorming")
 
 
+@pytest.mark.core
 def test_encode_complete_state(setup, focus_group_world):
     world = focus_group_world
 
@@ -83,6 +86,7 @@ def test_encode_complete_state(setup, focus_group_world):
     assert state['name'] == world.name, "The state should have the world name."
     assert state['agents'] is not None, "The state should have the agents."
 
+@pytest.mark.core
 def test_decode_complete_state(setup, focus_group_world):
     world = focus_group_world
 

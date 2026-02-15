@@ -1,4 +1,4 @@
-import tinytroupe.openai_utils as openai_utils
+import tinytroupe.clients as openai_utils
 
 
 def test_ollama_client_selection():

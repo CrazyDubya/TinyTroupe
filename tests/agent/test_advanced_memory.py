@@ -118,7 +118,7 @@ class TestTinyPersonReflection(unittest.TestCase):
         for episode in self.sample_episodes:
             self.person.episodic_memory.store(episode) # Uses the mocked connector
 
-    @patch('tinytroupe.openai_utils.client')
+    @patch('tinytroupe.clients.client')
     def test_reflection_stores_to_semantic_memory(self, mock_openai_client):
         mock_llm_response_content = json.dumps(["France's capital is Paris.", "Basic arithmetic is understood."])
         mock_openai_client.return_value.send_message.return_value = {'role': 'assistant', 'content': mock_llm_response_content}
@@ -145,7 +145,7 @@ class TestTinyPersonReflection(unittest.TestCase):
             self.assertEqual(call_args_2['content'], "Basic arithmetic is understood.")
 
 
-    @patch('tinytroupe.openai_utils.client')
+    @patch('tinytroupe.clients.client')
     def test_reflection_no_insights(self, mock_openai_client):
         mock_llm_response_content = json.dumps([]) # Empty list of insights
         mock_openai_client.return_value.send_message.return_value = {'role': 'assistant', 'content': mock_llm_response_content}
@@ -156,7 +156,7 @@ class TestTinyPersonReflection(unittest.TestCase):
         mock_openai_client.return_value.send_message.assert_called_once()
         self.person.semantic_memory.store.assert_not_called()
 
-    @patch('tinytroupe.openai_utils.client')
+    @patch('tinytroupe.clients.client')
     def test_reflection_handles_llm_error(self, mock_openai_client):
         mock_openai_client.return_value.send_message.side_effect = Exception("LLM API Error")
 

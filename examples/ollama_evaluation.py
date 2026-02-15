@@ -2,7 +2,7 @@
 
 import os
 from tinytroupe import config_manager
-from tinytroupe import openai_utils
+from tinytroupe import clients as openai_utils
 
 
 # Ensure we're using the local Ollama server

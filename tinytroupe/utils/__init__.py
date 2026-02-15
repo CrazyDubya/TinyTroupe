@@ -18,3 +18,4 @@ from tinytroupe.utils.semantics import *
 from tinytroupe.utils.behavior import *
 from tinytroupe.utils.parallel import *
 from tinytroupe.utils.serialization import *
+from tinytroupe.utils.concurrency import *
