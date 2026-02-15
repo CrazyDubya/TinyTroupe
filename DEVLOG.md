@@ -47,3 +47,12 @@
 1. **Pushed main** to origin
 2. **Removed redundant iCloud clones:** github_other/TinyTroupe, tinyexperiment/tinytroupe, prison/TinyTroupe
 3. **Experiments reference:** README now links to EXPERIMENTS_INDEX.md; use it as the reference for what's where
+
+---
+
+## 2026-02-15 — Merge upstream microsoft/TinyTroupe
+
+- Merged upstream/main (8378a11) into main
+- Incoming: GPT-5 support, Ollama improvements, clients refactor (openai_utils → tinytroupe/clients)
+- openai_utils kept as backward-compat alias to clients
+- Preserved Phase 1 enhancements: memory limits, semantic cache, moderation/telemetry in config
