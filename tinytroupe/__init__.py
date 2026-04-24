@@ -16,7 +16,7 @@ print(
     """
 !!!!
 DISCLAIMER: TinyTroupe relies on Artificial Intelligence (AI) models to generate content. 
-The AI models are not perfect and may produce inappropriate or inacurate results. 
+The AI models are not perfect and may produce inappropriate or inaccurate results. 
 For any serious or consequential use, please review the generated content before using it.
 !!!!
 """
@@ -99,6 +99,13 @@ class ConfigManager:
             "REASONING_MODEL", "o3-mini"
         )
 
+        # Vision model: used for image understanding. Falls back to MODEL if not set.
+        _vision_model_raw = config["OpenAI"].get("VISION_MODEL", None)
+        self._config["vision_model"] = _vision_model_raw if _vision_model_raw else None
+
+        # Vision detail level: auto, low, or high (controls token cost for images)
+        self._config["vision_detail"] = config["OpenAI"].get("VISION_DETAIL", "auto")
+
         self._config["max_completion_tokens"] = int(
             config["OpenAI"].get("MAX_COMPLETION_TOKENS", "1024")
         )
@@ -134,7 +141,7 @@ class ConfigManager:
             "CACHE_API_CALLS", False
         )
         self._config["cache_file_name"] = config["OpenAI"].get(
-            "CACHE_FILE_NAME", "openai_api_cache.pickle"
+            "CACHE_FILE_NAME", "openai_api_cache.json"
         )
 
         self._config["max_content_display_length"] = config["OpenAI"].getint(
@@ -327,6 +334,23 @@ class ConfigManager:
             key = key.lower()
 
         return self._config.get(key, default)
+
+    def get_with_fallback(self, key, fallback_key, default=None):
+        """
+        Get a configuration value, falling back to another key if the primary key is absent or None.
+
+        Args:
+            key (str): The primary configuration key to try first.
+            fallback_key (str): The fallback configuration key if the primary is not set.
+            default: The default value if neither key is found.
+
+        Returns:
+            The configuration value.
+        """
+        value = self.get(key)
+        if value is not None:
+            return value
+        return self.get(fallback_key, default)
 
     def reset(self):
         """Reset all configuration values to their original values from the config file."""

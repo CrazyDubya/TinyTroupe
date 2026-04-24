@@ -1,7 +1,7 @@
 import configparser
+import json
 import logging
 import os
-import pickle
 import threading
 import time
 from contextlib import contextmanager
@@ -21,11 +21,65 @@ logger = logging.getLogger("tinytroupe")
 config = utils.read_config_file()
 
 ###########################################################################
+# Base caching class
+###########################################################################
+
+
+class LLMCacheBase:
+    """
+    Base class providing a JSON-based caching mechanism for LLM API calls.
+    Subclasses inherit cache save/load functionality and the set_api_cache method.
+    """
+
+    def _save_cache(self):
+        """
+        Saves the API cache to disk as a JSON file.
+        """
+        with open(self.cache_file_name, "w", encoding="utf-8") as f:
+            json.dump(self.api_cache, f, ensure_ascii=False)
+
+    def _load_cache(self):
+        """
+        Loads the API cache from disk.
+        """
+        if os.path.exists(self.cache_file_name):
+            try:
+                with open(self.cache_file_name, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Cache file exists but could not be loaded: {e}. Starting with empty cache.")
+                return {}
+        return {}
+
+    @config_manager.config_defaults(cache_file_name="cache_file_name")
+    def set_api_cache(self, cache_api_calls, cache_file_name=None):
+        """
+        Enables or disables the caching of API calls.
+
+        Args:
+        cache_file_name (str): The name of the file to use for caching API calls.
+        """
+        self.cache_api_calls = cache_api_calls
+        self.cache_file_name = cache_file_name
+        if self.cache_api_calls:
+            abs_path = os.path.abspath(self.cache_file_name)
+            exists = os.path.exists(abs_path)
+            logger.info(
+                f"API cache file location: {abs_path} (exists: {exists})"
+            )
+            # load the cache, if any
+            self.api_cache = self._load_cache()
+            logger.info(
+                f"API cache loaded with {len(self.api_cache)} entries."
+            )
+
+
+###########################################################################
 # Client class
 ###########################################################################
 
 
-class OpenAIClient:
+class OpenAIClient(LLMCacheBase):
     """
     A utility class for interacting with the OpenAI API.
     """
@@ -56,6 +110,10 @@ class OpenAIClient:
         self._cost_stats_lock = threading.RLock()
         self._reset_cost_stats()
 
+        # Per-thread tracking of the last cache key used, so it can be
+        # selectively invalidated on retry without cross-thread interference.
+        self._thread_local = threading.local()
+
         self.set_api_cache(cache_api_calls, cache_file_name)
 
     @staticmethod
@@ -76,20 +134,6 @@ class OpenAIClient:
             return None
 
         return candidate
-
-    @config_manager.config_defaults(cache_file_name="cache_file_name")
-    def set_api_cache(self, cache_api_calls, cache_file_name=None):
-        """
-        Enables or disables the caching of API calls.
-
-        Args:
-        cache_file_name (str): The name of the file to use for caching API calls.
-        """
-        self.cache_api_calls = cache_api_calls
-        self.cache_file_name = cache_file_name
-        if self.cache_api_calls:
-            # load the cache, if any
-            self.api_cache = self._load_cache()
 
     def _reset_cost_stats(self):
         """
@@ -212,9 +256,10 @@ class OpenAIClient:
         self._setup_from_config()
 
         # dedent the messages (field 'content' only) if needed (using textwrap)
+        # Skip messages whose content is a list (multimodal content arrays).
         if dedent_messages:
             for message in current_messages:
-                if "content" in message:
+                if "content" in message and isinstance(message["content"], str):
                     message["content"] = utils.dedent(message["content"])
 
         # We need to adapt the parameters to the API type, so we create a dictionary with them first
@@ -259,6 +304,7 @@ class OpenAIClient:
                 # call the model, either from the cache or from the API
                 ###############################################################
                 cache_key = str((model, chat_api_params))  # need string to be hashable
+                self._thread_local.last_cache_key = cache_key  # per-thread tracking
 
                 pre_cached_response = self._get_cached_response(cache_key)
 
@@ -422,9 +468,9 @@ class OpenAIClient:
 
     def _to_cacheable_format(self, response):
         """
-        Converts an API response to a dictionary format that can be pickled.
+        Converts an API response to a dictionary format suitable for JSON caching.
         This is necessary because some response types (like ParsedChatCompletion
-        with generic types) cannot be pickled directly.
+        with generic types) are not directly JSON serializable.
         """
         try:
             # Try model_dump() first (Pydantic v2)
@@ -448,7 +494,7 @@ class OpenAIClient:
         """
         Reconstructs a ChatCompletion object from a cached dictionary.
         We use the base ChatCompletion class (not ParsedChatCompletion) to avoid
-        issues with generic type parameters that can't be pickled.
+        issues with generic type parameters that are not directly JSON serializable.
         """
         from openai.types.chat import ChatCompletion
         try:
@@ -456,6 +502,33 @@ class OpenAIClient:
         except Exception as e:
             logger.warning(f"Could not reconstruct response from cache: {e}")
             return None
+
+    def invalidate_last_cache_entry(self):
+        """
+        Removes the most recent cache entry (from the last ``send_message`` call
+        **on the current thread**).
+
+        Uses thread-local storage so that concurrent threads never
+        accidentally invalidate each other's cache entries.
+
+        This is intended to be called on retry paths (e.g., ``repeat_on_error``)
+        so that a bad cached response does not block all subsequent attempts.
+        """
+        key = getattr(self._thread_local, "last_cache_key", None)
+        if key is None:
+            return
+
+        cache_store = getattr(self, "api_cache", None)
+        if cache_store is None:
+            return
+
+        with self._cache_lock:
+            if key in cache_store:
+                del cache_store[key]
+                self._save_cache()
+                logger.info("Invalidated last API cache entry (retry path).")
+
+        self._thread_local.last_cache_key = None
 
     def _get_cached_response(self, cache_key):
         if not self.cache_api_calls:
@@ -469,6 +542,7 @@ class OpenAIClient:
             cached_dict = cache_store.get(cache_key)
             if cached_dict is None:
                 return None
+            logger.info("API cache hit — returning cached LLM response.")
             # Reconstruct the ChatCompletion object from the cached dict
             return self._from_cached_format(cached_dict)
 
@@ -547,7 +621,16 @@ class OpenAIClient:
             for message in messages:
                 num_tokens += tokens_per_message
                 for key, value in message.items():
-                    num_tokens += len(encoding.encode(value))
+                    if isinstance(value, list):
+                        # Multimodal content array: count only text parts
+                        for part in value:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                num_tokens += len(encoding.encode(part.get("text", "")))
+                            # Image parts contribute tokens too, but their exact count
+                            # depends on resolution and detail; we skip them here to avoid
+                            # over-counting.  OpenAI server-side billing is authoritative.
+                    elif isinstance(value, str):
+                        num_tokens += len(encoding.encode(value))
                     if key == "name":
                         num_tokens += tokens_per_name
             num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
@@ -556,28 +639,6 @@ class OpenAIClient:
         except Exception as e:
             logger.error(f"Error counting tokens: {e}")
             return None
-
-    def _save_cache(self):
-        """
-        Saves the API cache to disk. We use pickle to do that because some obj
-        are not JSON serializable.
-        """
-        # use pickle to save the cache
-        with open(self.cache_file_name, "wb") as f:
-            pickle.dump(self.api_cache, f)
-
-    def _load_cache(self):
-        """
-        Loads the API cache from disk.
-        """
-        if os.path.exists(self.cache_file_name):
-            try:
-                with open(self.cache_file_name, "rb") as f:
-                    return pickle.load(f)
-            except (EOFError, pickle.UnpicklingError) as e:
-                logger.warning(f"Cache file exists but could not be loaded: {e}. Starting with empty cache.")
-                return {}
-        return {}
 
     @config_manager.config_defaults(model="embedding_model")
     def get_embedding(self, text, model=None):

@@ -1,4 +1,10 @@
 # TinyTroupe 🤠🤓🥸🧐
+[![Core Tests](https://github.com/microsoft/TinyTroupe/actions/workflows/core-tests.yml/badge.svg)](https://github.com/microsoft/TinyTroupe/actions/workflows/core-tests.yml)
+
+<p align="center">
+  <a href="https://trendshift.io/repositories/12206" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12206" alt="Yeah, we are totally fine for not getting to #1, no hard feelings at all." style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</p>
+
 *LLM-powered multiagent persona simulation for imagination enhancement and business insights.*
 
 <p align="center">
@@ -47,7 +53,18 @@ We are releasing *TinyTroupe* at a relatively early stage, with considerable wor
 
 
 ## LATEST NEWS
-**[2026-02-01] Release 0.6.0 with new features and model updates:**
+
+<details open>
+<summary><b>[2026-03-28] Release 0.7.0: support for vision modality.</b></summary>
+
+  - Take a look one example [Vision for Product, Diagnosis and Appreciation Feedback (image modality)](./examples/Vision%20for%20Product%2C%20Diagnosis%20and%20Appreciation%20Feedback%20%28image%20modality%29.ipynb) notebook.
+  - LLM API caching now uses JSON instead of pickle.
+
+</details>
+
+<details>
+<summary><b>[2026-02-01] Release 0.6.0 with new features and model updates</b></summary>
+
   - Default model is now `gpt-5-mini`. **Important:** The GPT-5 model series uses different parameters than the former GPT-4* series, so you may need to adjust your `config.ini` settings accordingly. Legacy models (`gpt-4.1-mini`, `gpt-4o-mini`) are still supported.
   - Introduces `SimulationExperimentEmpiricalValidator` to compare simulation results against real-world empirical data using statistical tests (t-test, KS-test). This is essential for validating that simulations match actual human behavior.
   - Introduces `AgentChatJupyterWidget` for interactive conversations with agents directly in Jupyter notebooks.
@@ -57,10 +74,20 @@ We are releasing *TinyTroupe* at a relatively early stage, with considerable wor
   
   **Note: GPT-5 model parameters differ from GPT-4*, so please retest your important scenarios and adjust configurations accordingly.**
 
-**[2025-07-31] Release 0.5.2:**  Mostly just changes the default model, which is now set to GPT-4.1-mini. It seems to bring considerable quality improvements. 
-   **Note that GPT-4.1-mini can have significant differences in behavior w.r.t. to the previous default of GPT-4o-mini, so please make sure you retest your important scenarios using GPT-4.1-mini and adjust accordingly.**
+</details>
 
-**[2025-07-15] Release 0.5.1 with various improvements. Some highlights:**
+<details>
+<summary><b>[2025-07-31] Release 0.5.2</b></summary>
+
+Mostly just changes the default model, which is now set to GPT-4.1-mini. It seems to bring considerable quality improvements. 
+
+**Note that GPT-4.1-mini can have significant differences in behavior w.r.t. to the previous default of GPT-4o-mini, so please make sure you retest your important scenarios using GPT-4.1-mini and adjust accordingly.**
+
+</details>
+
+<details>
+<summary><b>[2025-07-15] Release 0.5.1 with various improvements</b></summary>
+
   - Released the first version of the [TinyTroupe paper (as a preprint)](https://arxiv.org/abs/2507.09788), which describes the library and its use cases in more detail. You can find the related experiments and complementary material in the [publications/](./publications/) folder.
   - `TinyPerson`s now include action correction mechanisms, allowing better adherence to persona specification, self-consistency and/or fluency (for details, refer to the paper we are releasing at the same time now).
   - Substantial improvements to the `TinyPersonFactory` class, which now: uses a plan-based approach to generate new agents, allowing better sampling of larger populations; generate agents in parallel.
@@ -74,7 +101,11 @@ We are releasing *TinyTroupe* at a relatively early stage, with considerable wor
   
   **Note: this will likely break some existing programs, as the API has changed in some places.**
 
-**[2025-01-29] Release 0.4.0 with various improvements. Some highlights:**
+</details>
+
+<details>
+<summary><b>[2025-01-29] Release 0.4.0 with various improvements</b></summary>
+
   - Personas have deeper specifications now, including  personality traits, preferences, beliefs, and more. It is likely we'll further expand this in the future. 
   - `TinyPerson`s can now be defined as JSON files as well, and loaded via the `TinyPerson.load_specification()`, for greater convenience. After loading the JSON file, you can still modify the agent programmatically. See the [examples/agents/](./examples/agents/) folder for examples.
   - Introduces the concept of *fragments* to allow the reuse of persona elements across different agents. See the [examples/fragments/](./examples/fragments/) folder for examples, and the notebook [Political Compass (customizing agents with fragments)](<./examples/Political Compass (customizing agents with fragments).ipynb>) for a demonstration.
@@ -83,6 +114,8 @@ We are releasing *TinyTroupe* at a relatively early stage, with considerable wor
   - Submodules have their own folders now, to allow better organization and growth.
   
   **Note: this will likely break some existing programs, as the API has changed in some places.**
+
+</details>
 
 ## Examples
 
@@ -208,10 +241,12 @@ or `TinyTroupeDashboard` directly.
 
 To run the library, you need:
   - Python 3.10 or higher. We'll assume you are using [Anaconda](https://docs.anaconda.com/anaconda/install/), but you can use other Python distributions.
+  - [Git](https://git-scm.com/downloads) for cloning the repository and for installing the library via `pip`.
   - Access to Azure OpenAI Service or Open AI GPT-4 APIs. You can get access to the Azure OpenAI Service [here](https://azure.microsoft.com/en-us/products/ai-services/openai-service), and to the OpenAI API [here](https://platform.openai.com/). 
       * For Azure OpenAI Service, you will need to set the `AZURE_OPENAI_KEY` and `AZURE_OPENAI_ENDPOINT` environment variables to your API key and endpoint, respectively.
       * For OpenAI, you will need to set the `OPENAI_API_KEY` environment variable to your API key.
       * For a local Ollama instance, set `OLLAMA_BASE_URL` (defaults to `http://localhost:11434/v1`) and optionally `OLLAMA_API_KEY` if required by your setup.
+      * For example, on Linux/macOS: `export OPENAI_API_KEY=your-key-here`, or on Windows (PowerShell): `$env:OPENAI_API_KEY="your-key-here"`. To persist it, add it to your shell profile or use `setx OPENAI_API_KEY "your-key-here"` on Windows.
   - By default, TinyTroupe `config.ini` is set to use OpenAI API with `gpt-5-mini` as the main model. The previous default (`gpt-4.1-mini`) is now considered legacy but is still expected to work. You can customize these values by including your own `config.ini` file in the same folder as the program or notebook you are running. An example of a `config.ini` file is provided in the [examples/](./examples/) folder.
 
 >[!IMPORTANT]
@@ -255,7 +290,11 @@ To actually run the examples, you need to download them to your local machine. Y
     git clone https://github.com/microsoft/tinytroupe
     cd tinytroupe
     ```
-2. You can now run the examples in the [examples/](./examples/) folder, or adapt them to create your own custom simulations. 
+2. You can now run the examples in the [examples/](./examples/) folder, or adapt them to create your own custom simulations. The examples are Jupyter notebooks, so you can start them with:
+    ```bash
+    jupyter notebook
+    ```
+    Then navigate to the `examples/` folder in the browser interface that opens.
 
 
 ### Local development
@@ -575,7 +614,7 @@ TinyTroupe provides a Jupyter widget for interactive conversations with agents, 
 from tinytroupe.ui import AgentChatJupyterWidget
 
 chat_interface = AgentChatJupyterWidget(people)  # pass a list of agents
-chat_interface.display()
+chat_interface by.display()
 ```
 
 This displays a chat interface with a dropdown to select agents and send messages interactively.

@@ -26,6 +26,12 @@ import conftest
 EXPORT_BASE_FOLDER = os.path.join(os.path.dirname(__file__), "outputs/exports")
 TEMP_SIMULATION_CACHE_FILE_NAME = os.path.join(os.path.dirname(__file__), "simulation_test_case.cache.json")
 
+# Fixed datetime used by TinyWorld in tests to ensure API cache keys remain
+# stable across CI runs.  Without this, datetime.now() would produce a
+# different system prompt on each run, invalidating cached LLM responses.
+from datetime import datetime as _dt
+FIXED_TEST_DATETIME = _dt(2025, 1, 1, 12, 0, 0)
+
 # Note: API caching is now configured in conftest.py via pytest_configure hook
 # to ensure CLI options (--use_cache, --refresh_cache) are parsed before configuration
 
@@ -211,4 +217,11 @@ def setup():
     TinyFactory.clear_factories()
     TinyPersonFactory.clear_factories()
 
+    # Pin TinyWorld's default datetime so that agent prompts (which include
+    # the current datetime) produce stable API cache keys across test runs.
+    TinyWorld.default_initial_datetime = FIXED_TEST_DATETIME
+
     yield
+
+    # Restore production default after each test
+    TinyWorld.default_initial_datetime = None

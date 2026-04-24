@@ -490,6 +490,12 @@ class EpisodicMemory(TinyMemory):
 
         # compute fixed prefix
         fixed_prefix = memories[: self.fixed_prefix_length] + omisssion_info
+        # TODO: to be more psychologically plausible, instead of a fixed prefix, we should carefully 
+        #       select which episodic memories from the agent history are recalled. The older the 
+        #       episodes, the less of the memories; the more recent the episodes, the more of the 
+        #       memories; but also, some episodes might be more relevant to be recalled than others, 
+        #       even if they are old. So we should consider relevance and recency to determine which 
+        #       memories to recall.
 
         # how many lookback values remain?
         remaining_lookback = min(
@@ -602,30 +608,43 @@ class SemanticMemory(TinyMemory):
                     "simulation_timestamp": value.get("simulation_timestamp", None)}
 
             # Refine the content of the engram is built based on the type of the value to make it more meaningful.
-            if value['type'] == 'action':
-                engram['content'] = f"# Action performed\n" +\
-                        f"I have performed the following action at date and time {value['simulation_timestamp']}:\n\n"+\
-                        f" {value['content']}"
-            
-            elif value['type'] == 'stimulus':
-                engram['content'] = f"# Stimulus\n" +\
-                        f"I have received the following stimulus at date and time {value['simulation_timestamp']}:\n\n"+\
-                        f" {value['content']}"
-            elif value['type'] == 'feedback':
-                engram['content'] = f"# Feedback\n" +\
-                        f"I have received the following feedback at date and time {value['simulation_timestamp']}:\n\n"+\
-                        f" {value['content']}"
-            elif value['type'] == 'consolidated':
-                engram['content'] = f"# Consolidated Memory\n" +\
-                        f"I have consolidated the following memory at date and time {value['simulation_timestamp']}:\n\n"+\
-                        f" {value['content']}"
-            elif value['type'] == 'reflection':
-                engram['content'] = f"# Reflection\n" +\
-                        f"I have reflected on the following memory at date and time {value['simulation_timestamp']}:\n\n"+\
-                        f" {value['content']}"
-            elif value['type'] == 'synthesized_knowledge':
-                engram['content'] = f"# Synthesized Knowledge (Reflected on: {value.get('source_reflection_timestamp', 'N/A')}, From: {value.get('reflected_episodes_count', 'N/A')} episodes)\n" +\
-                         f"Insight: {value['content']}"
+            if value["type"] == "action":
+                engram["content"] = (
+                    f"# Action performed\n"
+                    + f"I have performed the following action at date and time {value['simulation_timestamp']}:\n\n"
+                    + f" {value['content']}"
+                )
+
+            elif value["type"] == "stimulus":
+                engram["content"] = (
+                    f"# Stimulus\n"
+                    + f"I have received the following stimulus at date and time {value['simulation_timestamp']}:\n\n"
+                    + f" {value['content']}"
+                )
+            elif value["type"] == "feedback":
+                engram["content"] = (
+                    f"# Feedback\n"
+                    + f"I have received the following feedback at date and time {value['simulation_timestamp']}:\n\n"
+                    + f" {value['content']}"
+                )
+            elif value["type"] == "consolidated":
+                engram["content"] = (
+                    f"# Consolidated Memory\n"
+                    + f"I have consolidated the following memory at date and time {value['simulation_timestamp']}:\n\n"
+                    + f" {value['content']}"
+                )
+            elif value["type"] == "reflection":
+                engram["content"] = (
+                    f"# Reflection\n"
+                    + f"I have reflected on the following memory at date and time {value['simulation_timestamp']}:\n\n"
+                    + f" {value['content']}"
+                )
+            elif value["type"] == "image_description":
+                engram["content"] = (
+                    f"# Image Description\n"
+                    + f"I have seen the following image(s) at date and time {value['simulation_timestamp']}:\n\n"
+                    + f" {value['content']}"
+                )
             else:
                 engram['content'] = f"# Information\n" +\
                         f"I have obtained following information at date and time {value['simulation_timestamp']}:\n\n"+\
@@ -806,12 +825,63 @@ class EpisodicConsolidator(MemoryProcessor):
     def process(self, memories: list, timestamp: str=None, context:Union[str, list, dict] = None, persona:Union[str, dict] = None, sequential: bool = True) -> list:
         logger.debug(f"STARTING MEMORY CONSOLIDATION: {len(memories)} memories to consolidate")
 
-        enriched_context = f"CURRENT COGNITIVE CONTEXT OF THE AGENT: {context}" if context else "No specific context provided for consolidation."
+        # Strip image references from memories before consolidation — image IDs
+        # are session-local and carry no meaning for the consolidation LLM.
+        memories = self._strip_image_references(memories)
+
+        enriched_context = (
+            f"CURRENT COGNITIVE CONTEXT OF THE AGENT: {context}"
+            if context
+            else "No specific context provided for consolidation."
+        )
+
+        # we'll limit the length of memories to process at once, to avoid overflowing the input of embedding models, which
+        # are much more limited than the LLM's.
+        max_word_count = 1000
+        total_word_count = self.count_memory_content_words(memories)
+
+        if total_word_count <= max_word_count:
+            # Process all memories at once if under the limit
+            result = self._consolidate(memories, timestamp, enriched_context, persona)
+            logger.debug(f"Consolidated {len(memories)} memories into: {result}")
+            return result
+        else:
+            # Break memories into batches and consolidate each batch
+            logger.debug(
+                f"Total word count {total_word_count} exceeds {max_word_count}, breaking into batches"
+            )
 
         result = self._consolidate(memories, timestamp, enriched_context, persona)
         logger.debug(f"Consolidated {len(memories)} memories into: {result}")
         
         return result
+
+    @staticmethod
+    def _strip_image_references(memories: list) -> list:
+        """
+        Return a deep-enough copy of *memories* with any ``images``,
+        ``image_description``, and ``image_refs`` keys removed from
+        stimulus/action content dicts.  These are session-local references
+        (or already harvested during consolidation) that would only add noise
+        to the consolidation prompt.
+        """
+        import copy
+        cleaned = []
+        for mem in memories:
+            mem = copy.deepcopy(mem)
+            content = mem.get("content")
+            if isinstance(content, dict):
+                # Strip from stimuli list
+                for s in content.get("stimuli", []):
+                    s.pop("images", None)
+                    s.pop("image_description", None)
+                    s.pop("image_refs", None)
+                # Strip from action dict
+                action = content.get("action")
+                if isinstance(action, dict):
+                    action.pop("images", None)
+            cleaned.append(mem)
+        return cleaned
 
     @utils.llm(enable_json_output_format=True, enable_justification_step=False)
     def _consolidate(self, memories: list, timestamp: str, context:str, persona:str) -> dict:

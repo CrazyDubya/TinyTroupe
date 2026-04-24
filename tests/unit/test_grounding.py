@@ -216,3 +216,40 @@ def test_grounding_connector_search_edge_cases(temp_folder):
     results = connector.retrieve_relevant("architecture", top_k=1000)
     assert isinstance(results, list), "Should handle high top_k values"
     assert len(results) <= len(connector.documents), "Should not return more than available documents"
+
+
+def test_add_documents_with_text_needing_sanitization():
+    """
+    Test that add_documents handles text sanitization without raising a Pydantic
+    validation error. Reproduces the issue where directly assigning to document.text
+    on a Pydantic Document model throws an exception.
+    
+    See: https://github.com/run-llama/llama_index - Document is a Pydantic model,
+    so direct attribute assignment (document.text = ...) may fail depending on the
+    model config. The fix is to create a new Document with the sanitized text instead.
+    """
+    from llama_index.core import Document
+
+    connector = BaseSemanticGroundingConnector(name="sanitization_test")
+
+    # Create a document with text containing non-NFC Unicode characters that
+    # sanitize_raw_string will modify (NFC normalization changes the representation).
+    # U+0065 (e) + U+0301 (combining acute accent) -> NFC normalizes to U+00E9 (é)
+    text_needing_sanitization = "This is a resum\u0065\u0301 document about architecture."
+    
+    doc = Document(
+        text=text_needing_sanitization,
+        metadata={"semantic_memory_id": "test_doc_sanitize", "file_name": "test.txt"},
+    )
+
+    # This should NOT raise a Pydantic ValidationError.  Before the fix, the line
+    # ``document.text = utils.sanitize_raw_string(document.text)`` in add_documents
+    # could throw because Document is a Pydantic model.
+    connector.add_documents([doc])
+
+    # Verify the document was added and its text was properly sanitized
+    assert len(connector.documents) == 1
+    stored_text = connector.documents[0].text
+    # After NFC normalization, é should be a single codepoint
+    assert "\u00e9" in stored_text, "Text should be NFC-normalized after sanitization"
+    assert "\u0065\u0301" not in stored_text, "Decomposed form should be normalized away"

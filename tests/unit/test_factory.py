@@ -434,6 +434,82 @@ def test_factory_name_uniqueness_across_factories(setup):
 
 
 @pytest.mark.core
+def test_factory_pipeline_with_set_in_sampling_dimensions(setup, caplog):
+    """Regression test: debug logging must not crash when sampling_dimensions contains sets.
+
+    Background
+    ----------
+    The LLM that backs ``_compute_sampling_dimensions`` is expected to return
+    valid JSON, but occasionally it emits Python set-literal syntax instead of
+    JSON arrays — e.g. ``{"Engineer", "Teacher"}`` rather than
+    ``["Engineer", "Teacher"]``.  Because ``extract_json()`` in
+    ``tinytroupe/utils/llm.py`` falls back to ``ast.literal_eval`` when
+    ``json.loads`` fails, these set literals are silently parsed into real
+    Python ``set`` objects and embedded in the returned dictionary.
+
+    Originally, inside ``_initialize_sampling_plan_transaction``, the line::
+
+        logger.debug(f"Sampling dimensions: {json.dumps(sampling_dimensions, indent=4)}")
+
+    would crash with ``TypeError: Object of type set is not JSON serializable``.
+    The fix replaced ``json.dumps`` with ``_safe_json_dumps`` which handles sets.
+
+    What this test does
+    -------------------
+    It exercises the **real** factory pipeline while **mocking only**
+    ``_compute_sampling_dimensions`` to return a dict that contains ``set``
+    objects.  It verifies that the debug log line succeeds (the dimensions are
+    logged) even though later stages may still fail for other reasons.
+    """
+    import logging
+    from unittest.mock import patch
+
+    # This is what extract_json produces when the LLM emits set-literal
+    # syntax like {"Engineer", "Teacher"} instead of ["Engineer", "Teacher"].
+    mock_dimensions = {
+        "sampling_space_description": "Brazilian professionals",
+        "dimensions": [
+            {"name": "age", "range": [18, 65]},
+            {"name": "gender", "values": {"Male", "Female"}},  # set!
+            {"name": "profession", "values": {"Engineer", "Teacher", "Doctor"}},  # set!
+        ],
+    }
+
+    factory = TinyPersonFactory(
+        sampling_space_description="Brazilian professionals",
+        total_population_size=5,
+        context="Market research in Brazil",
+    )
+
+    tinytroupe_logger = logging.getLogger("tinytroupe")
+    original_level = tinytroupe_logger.level
+    tinytroupe_logger.setLevel(logging.DEBUG)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="tinytroupe"):
+            with patch.object(
+                TinyPersonFactory,
+                "_compute_sampling_dimensions",
+                return_value=mock_dimensions,
+            ):
+                # The pipeline will fail downstream (e.g. _compute_sample_plan
+                # cannot serialize sets for the LLM call), but the debug log
+                # line with _safe_json_dumps must succeed first.
+                try:
+                    factory.generate_people(2, verbose=True)
+                except Exception:
+                    pass  # downstream failures are expected
+
+        # The critical assertion: the debug message with the sampling dimensions
+        # was logged successfully, meaning _safe_json_dumps handled the sets.
+        assert any(
+            "Sampling dimensions:" in record.message
+            for record in caplog.records
+        ), "Expected 'Sampling dimensions:' debug message was never logged — _safe_json_dumps may have crashed on sets"
+    finally:
+        tinytroupe_logger.setLevel(original_level)
+
+
+@pytest.mark.core
 def test_factory_error_handling(setup):
     """Test error handling in factory operations."""
     # Test invalid demography input

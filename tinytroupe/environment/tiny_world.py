@@ -35,19 +35,29 @@ class TinyWorld:
     # Whether to display environments communications or not, for all environments. 
     communication_display = True
 
-    def __init__(self, name: str=None, agents=[], 
-                 initial_datetime=datetime.now(),
-                 interventions=[],
-                 broadcast_if_no_target=True,
-                 max_additional_targets_to_display=3):
+    # Class-level default for initial_datetime. When set (e.g. during testing),
+    # new TinyWorld instances that don't receive an explicit initial_datetime
+    # will use this value instead of datetime.now(). This keeps cache keys
+    # stable across test runs.
+    default_initial_datetime = None
+
+    def __init__(
+        self,
+        name: str = None,
+        agents=[],
+        initial_datetime=None,
+        interventions=[],
+        broadcast_if_no_target=True,
+        max_additional_targets_to_display=3,
+    ):
         """
         Initializes an environment.
 
         Args:
             name (str): The name of the environment.
             agents (list): A list of agents to add to the environment.
-            initial_datetifme (datetime): The initial datetime of the environment, or None (i.e., explicit time is optional). 
-                Defaults to the current datetime in the real world.
+            initial_datetime (datetime): The initial datetime of the environment, or None (i.e., explicit time is optional).
+                Defaults to ``default_initial_datetime`` if set, otherwise the current real-world datetime.
             interventions (list): A list of interventions to apply in the environment at each simulation step.
             broadcast_if_no_target (bool): If True, broadcast actions if the target of an action is not found.
             max_additional_targets_to_display (int): The maximum number of additional targets to display in a communication. If None, 
@@ -58,8 +68,13 @@ class TinyWorld:
             self.name = name
         else:
             self.name = f"TinyWorld {utils.fresh_id(self.__class__.__name__)}"
-            
-        self.current_datetime = initial_datetime
+
+        if initial_datetime is not None:
+            self.current_datetime = initial_datetime
+        elif self.__class__.default_initial_datetime is not None:
+            self.current_datetime = self.__class__.default_initial_datetime
+        else:
+            self.current_datetime = datetime.now()
         self.broadcast_if_no_target = broadcast_if_no_target
         self.simulation_id = None # will be reset later if the agent is used within a specific simulation scope
         
@@ -551,6 +566,8 @@ class TinyWorld:
                 self._handle_reach_out(source, content, target)
             elif action_type == "TALK":
                 self._handle_talk(source, content, target)
+            elif action_type == "SHOW":
+                self._handle_show(source, action, target)
 
     @transactional()
     def _handle_reach_out(self, source_agent: TinyPerson, content: str, target: str):
@@ -595,6 +612,46 @@ class TinyWorld:
             target_agent.listen(content, source=source_agent)
         elif self.broadcast_if_no_target:
             self.broadcast(content, source=source_agent)
+
+    @transactional()
+    def _handle_show(self, source_agent: TinyPerson, action: dict, target: str):
+        """
+        Handles the SHOW action by forwarding images from the source agent to the target.
+
+        The source agent's image registry is consulted to resolve image IDs to actual
+        file paths / URLs, which are then delivered to the target agent via ``see()``.
+
+        Args:
+            source_agent (TinyPerson): The agent that issued the SHOW action.
+            action (dict): The full action dict, including the optional ``images`` list of image IDs.
+            target (str): The target agent's name.
+        """
+        target_agent = self.get_agent_by_name(target)
+        image_ids = action.get("images") or []
+        content = action.get("content", "")
+
+        # Resolve image IDs to actual paths via the source agent's registry
+        resolved_images = []
+        for img_id in image_ids:
+            path = source_agent._image_registry.get(img_id)
+            if path is not None:
+                resolved_images.append(path)
+            else:
+                logger.warning(
+                    f"[{self.name}] SHOW action: image ID '{img_id}' not found in {source_agent.name}'s registry."
+                )
+
+        logger.debug(
+            f"[{self.name}] Delivering SHOW from {name_or_empty(source_agent)} to {name_or_empty(target_agent)}: "
+            f"{len(resolved_images)} image(s)."
+        )
+
+        if target_agent is not None:
+            target_agent.see(images=resolved_images, description=content, source=source_agent)
+        elif self.broadcast_if_no_target:
+            for agent in self.agents:
+                if agent != source_agent:
+                    agent.see(images=resolved_images, description=content, source=source_agent)
 
     #######################################################################
     # Interaction methods

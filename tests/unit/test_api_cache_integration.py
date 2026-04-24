@@ -3,8 +3,8 @@ Integration tests for the LLM API caching mechanism.
 
 These tests make real API calls to verify the cache is actually working end-to-end.
 """
+import json
 import os
-import pickle
 import pytest
 from pydantic import BaseModel
 
@@ -51,9 +51,9 @@ class TestAPICacheIntegration:
             assert file_exists_after, f"Cache file should exist at {cache_path}"
             assert cache_size_after > 0, "Cache file should not be empty"
             
-            # Verify cache file is valid pickle
-            with open(cache_path, "rb") as f:
-                cache_data = pickle.load(f)
+            # Verify cache file is valid JSON
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache_data = json.load(f)
             
             print(f"=== Cache entries: {len(cache_data)}")
             assert len(cache_data) >= 1, "Cache should have at least one entry"
@@ -65,7 +65,7 @@ class TestAPICacheIntegration:
         Test caching with response_format (Pydantic structured output).
         
         This specifically tests the case where ParsedChatCompletion[T] is returned,
-        which requires special handling for pickling due to generic type parameters.
+        which requires special handling for JSON serialization due to generic type parameters.
         """
         api_client = client()
         
@@ -97,9 +97,9 @@ class TestAPICacheIntegration:
         cache_size_after_first = os.path.getsize(cache_path) if os.path.exists(cache_path) else 0
         print(f"=== Cache size before: {cache_size_before}, after first call: {cache_size_after_first}")
         
-        # Verify cache file can be loaded (this would fail with unpicklable objects)
-        with open(cache_path, "rb") as f:
-            cache_data = pickle.load(f)
+        # Verify cache file can be loaded (this would fail with non-serializable objects)
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
         print(f"=== Cache successfully loaded with {len(cache_data)} entries")
         
         # Second call with same params - should hit the cache
