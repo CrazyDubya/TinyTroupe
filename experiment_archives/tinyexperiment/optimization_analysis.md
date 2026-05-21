@@ -55,6 +55,12 @@
 - Compress semantic memory with embeddings
 - Lazy-load unused agent fields
 
+## **STATUS**
+
+- `create_compact_text_representation()` added in `tinytroupe/caching/semantic_cache.py`
+  for template-reference style cache keys. Use `template_ref` when calls share the same prompt template.
+- LRU eviction and compression are implemented in `control.py`.
+
 ## 🚀 **IMPLEMENTATION PLAN:**
 
 ### **Phase 1: Language Optimization**

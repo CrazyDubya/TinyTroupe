@@ -35,6 +35,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "matplotlib",
+    "seaborn",
     "pydantic>=2.5.0",
     "pypandoc",
     "textdistance",

@@ -1,6 +1,9 @@
 # 🔧 SURGICAL ASYNC FIX PLAN
 *Blake's immediate fix for epic simulation launch*
 
+**Status**: Addressed. Use `return_actions=True` when calling `listen_and_act` or `act` in scripts.
+See `listen_and_act` and `act` docstrings in `tinytroupe/agent/tiny_person.py`.
+
 ## 🚨 **PROBLEM IDENTIFIED**
 ```
 RuntimeWarning: coroutine 'TinyPerson.listen_and_act' was never awaited

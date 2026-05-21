@@ -41,18 +41,8 @@ def test_generate_person(setup):
 
 def test_generate_person_with_different_temperatures(setup):
     """Test person generation with different temperature settings.
-    Note: This test only runs for models that contain 'gpt-4' in their name,
-    as other models (like gpt-5-mini) don't support custom temperatures.
+    Runs for any configured model; some backends may ignore temperature.
     """
-    import tinytroupe
-
-    # Get current model name and skip if not a gpt-4 model
-    model_name = tinytroupe.config_manager.get("model").lower()
-    if "gpt-4" not in model_name:
-        pytest.skip(
-            f"Model '{tinytroupe.config_manager.get('model')}' does not support custom temperatures - test only runs for gpt-4 models"
-        )
-
     context = "A technology startup focused on AI innovations."
 
     # Test with low temperature

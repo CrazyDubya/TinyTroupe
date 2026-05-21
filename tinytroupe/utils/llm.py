@@ -400,10 +400,6 @@ class LLMChat:
 
             # Set up typing for the output
             if current_output_type is not None:
-
-                # TODO obsolete?
-                #
-                ## Add type coercion instructions if not already added
                 # if not any(msg.get("content", "").startswith("In your response, you **MUST** provide a value")
                 #          for msg in self.messages if msg.get("role") == "system"):
 
@@ -580,16 +576,20 @@ class LLMChat:
                         ):
                             # if justification step is enabled, we expect a JSON object with reasoning (optionally), justification, value, and confidence
                             # BUT not for Pydantic models which expect direct JSON structure
-                            self.response_reasoning = self.response_json.get(
+                            _json = self.response_json if isinstance(self.response_json, dict) else {}
+                            self.response_reasoning = _json.get(
                                 "reasoning", None
                             )
-                            self.response_value = self.response_json.get("value", None)
-                            self.response_justification = self.response_json.get(
+                            self.response_value = _json.get("value", None)
+                            self.response_justification = _json.get(
                                 "justification", None
                             )
-                            self.response_confidence = self.response_json.get(
+                            self.response_confidence = _json.get(
                                 "confidence", None
                             )
+                            # For str output: if JSON parse failed or "value" missing, fall back to raw text
+                            if self.response_value is None and current_output_type == str and self.response_raw:
+                                self.response_value = str(self.response_raw)
                         else:
                             # For direct JSON output (like Pydantic models), use the whole JSON as the value
                             self.response_value = self.response_json
@@ -930,7 +930,7 @@ class LLMChat:
 
         try:
             result = utils.extract_json(llm_output)
-            # extract_json returns {} on failure, but we need dict or list
+            # extract_json returns None on failure; treat {} as failure unless output contains "{}"
             if result == {} and not (
                 isinstance(llm_output, str)
                 and ("{}" in llm_output or "{" in llm_output and "}" in llm_output)
@@ -956,7 +956,7 @@ class LLMChat:
     def _request_list_of_dict_llm_message(self):
         return {
             "role": "user",
-            "content": "The `value` field you generate **must** be a list of dictionaries, specified as a JSON structure embedded in a string. For example, `[\{...\}, \{...\}, ...]`. This is critical for later processing.",
+            "content": "The `value` field you generate **must** be a list of dictionaries, specified as a JSON structure embedded in a string. For example, `[{...}, {...}, ...]`. This is critical for later processing.",
         }
 
     def _coerce_to_list(self, llm_output: str):
@@ -1058,12 +1058,6 @@ def llm(
                 if "self" in sig.parameters:
                     args = args[1:]
 
-                # TODO obsolete?
-                #
-                # if we are relying on parameters, they must be named
-                # if len(args) > 0:
-                #    raise ValueError("Positional arguments are not allowed in LLM-based functions whose body does not return a string.")
-
                 user_prompt = f"Execute the above computation as best as you can using the following input parameter values and respecting the output format defined by the computation specification. Produce the requested output even if it is very long.\n"
                 user_prompt += (
                     f" ## Unnamed parameters\n{json.dumps(args, indent=4)}\n\n"
@@ -1107,10 +1101,30 @@ def llm(
 ################################################################################
 # Model output utilities
 ################################################################################
-def extract_json(text: str) -> dict:
+def _extract_first_json_object(text: str) -> str | None:
+    """Extract the first complete JSON object (or array) from text. Handles nested braces."""
+    start = text.find("{")
+    if start < 0:
+        start = text.find("[")
+    if start < 0:
+        return None
+    depth = 0
+    open_c, close_c = ("{", "}") if text[start] == "{" else ("[", "]")
+    for i in range(start, len(text)):
+        if text[i] == open_c:
+            depth += 1
+        elif text[i] == close_c:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def extract_json(text: str) -> dict | None:
     """
     Extracts a JSON object from a string, ignoring: any text before the first
-    opening curly brace; and any Markdown opening (```json) or closing(```) tags.
+    opening curly brace; Markdown code blocks (```json ... ```); and when multiple
+    JSON objects exist, returns the first valid one.
     """
     try:
         logger.debug(f"Extracting JSON from text: {text}")
@@ -1125,20 +1139,32 @@ def extract_json(text: str) -> dict:
                 logger.error(
                     f"Error occurred while validating JSON: {e}. Input text: {text}."
                 )
-                return {}
+                return None
 
             logger.debug(f"Text is already a dictionary. Returning it.")
             return text
+
+        # Strip markdown code blocks (```json ... ``` or ``` ... ```)
+        text = re.sub(r"^[\s\n]*```(?:json)?\s*\n?", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n?```\s*$", "", text)
+        # Also remove inline ``` that might wrap only part of the content
+        text = re.sub(r"```(?:json)?\s*\n?", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n?```", "", text)
 
         filtered_text = ""
 
         # remove any text before the first opening curly or square braces, using regex. Leave the braces.
         filtered_text = re.sub(r"^.*?({|\[)", r"\1", text, flags=re.DOTALL)
 
-        # remove any trailing text after the LAST closing curly or square braces, using regex. Leave the braces.
-        filtered_text = re.sub(
-            r"(}|\])(?!.*(\]|\})).*$", r"\1", filtered_text, flags=re.DOTALL
-        )
+        # If multiple JSON objects (e.g. model output "obj1 DONE obj2"), take first only
+        first_obj = _extract_first_json_object(filtered_text)
+        if first_obj is not None:
+            filtered_text = first_obj
+        else:
+            # remove any trailing text after the LAST closing curly or square braces
+            filtered_text = re.sub(
+                r"(}|\])(?!.*(\]|\})).*$", r"\1", filtered_text, flags=re.DOTALL
+            )
 
         # remove invalid escape sequences, which show up sometimes
         # Handle common problematic escape sequences more comprehensively
@@ -1147,6 +1173,13 @@ def extract_json(text: str) -> dict:
         )  # remove invalid escapes but keep valid JSON escapes
         filtered_text = re.sub(r"\\'", "'", filtered_text)  # replace \' with just '
         filtered_text = re.sub(r"\\,", ",", filtered_text)  # replace \, with just ,
+
+        # Remove trailing commas before } or ] (common in LLM outputs, invalid in JSON)
+        prev = None
+        while prev != filtered_text:
+            prev = filtered_text
+            filtered_text = re.sub(r",\s*}", "}", filtered_text)
+            filtered_text = re.sub(r",\s*]", "]", filtered_text)
 
         # parse the final JSON in a robust manner, to account for potentially messy LLM outputs
         try:
@@ -1203,10 +1236,14 @@ def extract_json(text: str) -> dict:
         return parsed
 
     except Exception as e:
+        try:
+            filtered_snippet = repr(filtered_text)[:200]
+        except NameError:
+            filtered_snippet = "<not yet set>"
         logger.error(
-            f"Error occurred while extracting JSON: {e}. Input text: {text}. Filtered text: {filtered_text}"
+            f"Error occurred while extracting JSON: {e}. Input text: {text!r}. Filtered text: {filtered_snippet}"
         )
-        return {}
+        return None
 
 
 def extract_code_block(text: str) -> str:

@@ -1,4 +1,6 @@
-from tinytroupe.environment import logger, default # logger is imported here
+import logging
+logger = logging.getLogger("tinytroupe")
+from tinytroupe import default
 
 import copy
 from datetime import datetime, timedelta
@@ -14,8 +16,7 @@ import tinytroupe.control as control
 from tinytroupe.control import transactional
 from tinytroupe import utils, config_manager
 
-# Added import for Intervention
-from tinytroupe.steering.intervention import Intervention
+# Intervention imported lazily where needed to avoid circular import
 
 
 
@@ -97,17 +98,19 @@ class TinyWorld:
     # Simulation control methods
     #######################################################################
     @transactional()
-    def _step(self, 
-              timedelta_per_step=None, 
+    def _step(self,
+              timedelta_per_step=None,
               randomize_agents_order=True,
-              parallelize=True): # TODO have a configuration for parallelism?
+              parallelize=None):
         """
         Performs a single step in the environment. This default implementation
         simply calls makes all agents in the environment act and properly
-        handle the resulting actions. Subclasses might override this method to implement 
+        handle the resulting actions. Subclasses might override this method to implement
         different policies.
         """
-        
+        if parallelize is None:
+            parallelize = config_manager.get("parallel_agent_actions", True)
+
         # Increase current datetime if timedelta is given. This must happen before
         # any other simulation updates, to make sure that the agents are acting
         # in the correct time, particularly if only one step is being run.
@@ -121,7 +124,7 @@ class TinyWorld:
             should_apply_intervention = intervention.check_precondition()
             if should_apply_intervention:
                 if TinyWorld.communication_display:
-                    self._display_intervention_communication(intervention)
+                    self._log_intervention_communication(intervention)
                 intervention.apply_effect()
                 
                 logger.debug(f"[{self.name}] Intervention '{intervention.name}' was applied.")
@@ -290,7 +293,7 @@ class TinyWorld:
             logger.info(f"[{self.name}] Running world simulation step {i+1} of {steps}.")
 
             if TinyWorld.communication_display:
-                self._display_step_communication(cur_step=i+1, total_steps=steps, timedelta_per_step=timedelta_per_step)
+                self._log_step_communication(cur_step=i+1, total_steps=steps, timedelta_per_step=timedelta_per_step)
 
             agents_actions = self._step(timedelta_per_step=timedelta_per_step, randomize_agents_order=randomize_agents_order, parallelize=parallelize)
             agents_actions_over_time.append(agents_actions)
@@ -683,8 +686,7 @@ class TinyWorld:
     # Formatting conveniences
     ###########################################################
 
-    # TODO better names for these "display" methods
-    def _display_step_communication(self, cur_step, total_steps, timedelta_per_step=None):
+    def _log_step_communication(self, cur_step, total_steps, timedelta_per_step=None):
         """
         Displays the current communication and stores it in a buffer for later use.
         """
@@ -692,7 +694,7 @@ class TinyWorld:
 
         self._push_and_display_latest_communication({"kind": 'step', "rendering": rendering, "content": None, "source":  None, "target": None})
     
-    def _display_intervention_communication(self, intervention):
+    def _log_intervention_communication(self, intervention):
         """
         Displays the current intervention communication and stores it in a buffer for later use.
         """
@@ -935,6 +937,8 @@ class TinyWorld:
         del state["agents"]
 
         # Deserialize Interventions
+        from tinytroupe.steering.intervention import Intervention
+
         self._interventions = []
         if "_interventions" in state and isinstance(state["_interventions"], list):
             for inter_data in state["_interventions"]:

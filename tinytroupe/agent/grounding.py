@@ -97,9 +97,6 @@ class BaseSemanticGroundingConnector(GroundingConnector):
                 store_nodes_override=True
             )
 
-        # TODO remove?
-        #self.add_documents(self.documents)        
-
     @staticmethod
     def _serialize_index(index):
         """Helper function to serialize index with proper storage context"""
@@ -222,8 +219,9 @@ class BaseSemanticGroundingConnector(GroundingConnector):
             for document in new_documents:
                 logger.debug(f"Adding document {document} to index, text is: {document.text}")
 
-                # out of an abundance of caution, we sanitize the text
-                document.text = utils.sanitize_raw_string(document.text)
+                # Sanitize text; Document.text may be read-only (Pydantic), so create new instance
+                sanitized_text = utils.sanitize_raw_string(document.text)
+                document = Document(text=sanitized_text, metadata=dict(document.metadata))
 
                 logger.debug(f"Document text after sanitization: {document.text}")
 
