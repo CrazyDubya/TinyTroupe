@@ -8,6 +8,7 @@ supporting local model inference.
 import requests
 import json
 import logging
+import socket
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
@@ -20,6 +21,7 @@ ALLOWED_PARAMS = {'temperature', 'top_p', 'num_ctx', 'top_k', 'num_predict'}
 def _validate_base_url(base_url: str) -> str:
     """
     Validate that base_url is localhost only to prevent SSRF attacks.
+    Uses IP address resolution to prevent hostname bypass attacks.
 
     Args:
         base_url: URL to validate
@@ -28,17 +30,37 @@ def _validate_base_url(base_url: str) -> str:
         Validated URL
 
     Raises:
-        ValueError: If URL is not localhost
+        ValueError: If URL is not localhost or resolves to non-loopback address
     """
+    # Check for userinfo bypass before parsing
+    if '@' in base_url:
+        raise ValueError("Userinfo not allowed in URL")
+
     parsed = urlparse(base_url)
     if parsed.scheme not in ('http', 'https'):
         raise ValueError("Only http/https URLs allowed")
     hostname = parsed.hostname
     if not hostname:
         raise ValueError("Invalid hostname")
-    # Only allow localhost
-    if hostname not in ('localhost', '127.0.0.1', '::1'):
-        raise ValueError("Only localhost URLs allowed for Ollama provider")
+
+    # Resolve hostname to IP address and check if loopback
+    try:
+        # Get address info for the hostname
+        addr_info = socket.getaddrinfo(hostname, None)
+        for addr in addr_info:
+            ip = addr[4][0]  # Get IP address
+            # Check if IPv4 loopback (127.x.x.x)
+            if ip.startswith('127.'):
+                continue  # Allow loopback
+            # Check if IPv6 loopback (::1)
+            elif ip == '::1':
+                continue  # Allow loopback
+            else:
+                raise ValueError(f"Only localhost URLs allowed for Ollama provider (resolved to {ip})")
+    except socket.gaierror:
+        raise ValueError("Unable to resolve hostname")
+
+    return base_url
     return base_url
 
 
@@ -85,7 +107,7 @@ class OllamaProvider:
             result = response.json()
             return result.get("response", "")
         except Exception as e:
-            logger.warning(f"Ollama generation failed: {e}")
+            logger.warning("Ollama generation failed")
             raise Exception("Ollama generation failed")
 
     def check_connection(self) -> bool:
