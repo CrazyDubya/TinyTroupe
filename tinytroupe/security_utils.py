@@ -41,23 +41,25 @@ def sanitize_input(input_str: str, max_length: int = 10000) -> str:
     if not isinstance(input_str, str):
         raise SecurityException("Input must be a string")
 
-    # Check for suspicious patterns
+    # Truncate FIRST, then validate - prevents truncate-after-validation bypass
+    if len(input_str) > max_length:
+        input_str = input_str[:max_length]
+
+    # Check for suspicious patterns (now validates the actual string that will be returned)
     dangerous_patterns = [
         r'<script[^>]*>.*?</script>',  # Script tags
         r'javascript:',                  # JavaScript protocol
         r'on\w+\s*=',                   # Event handlers
         r'<iframe[^>]*>',               # Iframes
+        r'vbscript:',                    # VBScript protocol
+        r'data:',                        # Data protocol (can be abused)
     ]
 
     for pattern in dangerous_patterns:
-        if re.search(pattern, input_str, re.IGNORECASE):
+        if re.search(pattern, input_str, re.IGNORECASE | re.DOTALL):
             raise SecurityException(
                 f"Input contains potentially malicious pattern: {pattern}"
             )
-
-    # Truncate to max length
-    if len(input_str) > max_length:
-        input_str = input_str[:max_length]
 
     return input_str
 
@@ -97,10 +99,10 @@ def validate_llm_response(response: str, max_tokens: int = 4096) -> None:
     if not isinstance(response, str):
         raise ValidationException("Response must be a string")
 
-    # Rough token estimation (1 token ≈ 4 characters)
-    estimated_tokens = len(response) // 4
+    # Conservative token estimation (1 token ≈ 4 characters, ceiling division)
+    estimated_tokens = (len(response) + 3) // 4  # Conservative ceiling division
 
-    if estimated_tokens > max_tokens:
+    if estimated_tokens >= max_tokens:  # Use >= to catch boundary cases
         raise ValidationException(
             f"Response length ({estimated_tokens} tokens) exceeds maximum ({max_tokens})"
         )
