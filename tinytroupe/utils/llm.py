@@ -1101,33 +1101,61 @@ def llm(
 ################################################################################
 # Model output utilities
 ################################################################################
+MAX_EXTRACT_JSON_NESTING_DEPTH = 64
+
+
 def _extract_first_json_object(text: str) -> str | None:
-    """Extract the first complete JSON object (or array) from text. Handles nested braces."""
-    start = text.find("{")
-    if start < 0:
-        start = text.find("[")
-    if start < 0:
+    """Extract the first complete JSON object or array from surrounding text."""
+    starts = [pos for pos in (text.find("{"), text.find("[")) if pos >= 0]
+    if not starts:
         return None
-    depth = 0
-    open_c, close_c = ("{", "}") if text[start] == "{" else ("[", "]")
-    for i in range(start, len(text)):
-        if text[i] == open_c:
-            depth += 1
-        elif text[i] == close_c:
-            depth -= 1
-            if depth == 0:
+
+    start = min(starts)
+    close_for = {"{": "}", "[": "]"}
+    stack = [close_for[text[start]]]
+    in_string = False
+    escaped = False
+
+    for i in range(start + 1, len(text)):
+        char = text[i]
+
+        if escaped:
+            escaped = False
+            continue
+
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+
+        if char == '"':
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if char in close_for:
+            stack.append(close_for[char])
+            if len(stack) > MAX_EXTRACT_JSON_NESTING_DEPTH:
+                raise ValueError(
+                    f"JSON nesting depth exceeds {MAX_EXTRACT_JSON_NESTING_DEPTH}"
+                )
+        elif stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
                 return text[start : i + 1]
+
     return None
 
 
-def extract_json(text: str) -> dict | None:
+def extract_json(text: str) -> dict | list | None:
     """
     Extracts a JSON object from a string, ignoring: any text before the first
     opening curly brace; Markdown code blocks (```json ... ```); and when multiple
     JSON objects exist, returns the first valid one.
     """
     try:
-        logger.debug(f"Extracting JSON from text: {text}")
+        logger.debug(f"Extracting JSON from text: {repr(text)[:500]}")
 
         # if it already is a dictionary or list, return it
         if isinstance(text, dict) or isinstance(text, list):
@@ -1144,17 +1172,28 @@ def extract_json(text: str) -> dict | None:
             logger.debug(f"Text is already a dictionary. Returning it.")
             return text
 
-        # Strip markdown code blocks (```json ... ``` or ``` ... ```)
-        text = re.sub(r"^[\s\n]*```(?:json)?\s*\n?", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\n?```\s*$", "", text)
-        # Also remove inline ``` that might wrap only part of the content
-        text = re.sub(r"```(?:json)?\s*\n?", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\n?```", "", text)
+        if not isinstance(text, str) or text.strip() == "":
+            return None
+
+        # If a fenced code block appears before the JSON payload, parse the block
+        # content without altering backticks that may appear inside JSON strings.
+        fence_start = text.find("```")
+        json_starts = [pos for pos in (text.find("{"), text.find("[")) if pos >= 0]
+        if fence_start >= 0 and (not json_starts or fence_start < min(json_starts)):
+            fenced_match = re.search(
+                r"```(?:json)?[ \t]*\r?\n?(.*?)\r?\n?```",
+                text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if fenced_match is not None:
+                text = fenced_match.group(1)
 
         filtered_text = ""
 
         # remove any text before the first opening curly or square braces, using regex. Leave the braces.
         filtered_text = re.sub(r"^.*?({|\[)", r"\1", text, flags=re.DOTALL)
+        if filtered_text == text and not json_starts:
+            return None
 
         # If multiple JSON objects (e.g. model output "obj1 DONE obj2"), take first only
         first_obj = _extract_first_json_object(filtered_text)
@@ -1169,7 +1208,7 @@ def extract_json(text: str) -> dict | None:
         # remove invalid escape sequences, which show up sometimes
         # Handle common problematic escape sequences more comprehensively
         filtered_text = re.sub(
-            r"\\([^\"\\\/bfnrt])", r"\1", filtered_text
+            r"\\([^\"\\\/bfnrtu])", r"\1", filtered_text
         )  # remove invalid escapes but keep valid JSON escapes
         filtered_text = re.sub(r"\\'", "'", filtered_text)  # replace \' with just '
         filtered_text = re.sub(r"\\,", ",", filtered_text)  # replace \, with just ,

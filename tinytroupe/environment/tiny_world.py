@@ -11,6 +11,7 @@ import time
 import threading
 
 from tinytroupe.agent import *
+from tinytroupe.clients import client
 from tinytroupe.utils import name_or_empty, pretty_datetime
 import tinytroupe.control as control
 from tinytroupe.control import transactional
@@ -78,6 +79,7 @@ class TinyWorld:
         self._max_additional_targets_to_display = max_additional_targets_to_display
 
         self.console = Console()
+        self._num_steps = 0
 
         # Parallel execution metrics
         self._parallel_metrics = {
@@ -297,9 +299,91 @@ class TinyWorld:
 
             agents_actions = self._step(timedelta_per_step=timedelta_per_step, randomize_agents_order=randomize_agents_order, parallelize=parallelize)
             agents_actions_over_time.append(agents_actions)
+            self._num_steps += 1
         
         if return_actions:
             return agents_actions_over_time
+
+    @staticmethod
+    def _divide_cost_stats(base_stats, divisor):
+        if divisor <= 0:
+            return None
+        return {
+            key: value / divisor
+            for key, value in base_stats.items()
+            if isinstance(value, (int, float))
+        }
+
+    def get_cost_stats(self):
+        """
+        Returns client cost statistics plus world-level derivative metrics.
+        """
+        base_stats = client().get_cost_stats()
+        num_agents = len(self.agents)
+        num_steps = getattr(self, "_num_steps", 0)
+
+        return {
+            "base_stats": base_stats,
+            "num_agents": num_agents,
+            "num_steps": num_steps,
+            "per_agent": self._divide_cost_stats(base_stats, num_agents),
+            "per_step": self._divide_cost_stats(base_stats, num_steps),
+            "per_agent_per_step": self._divide_cost_stats(
+                base_stats, num_agents * num_steps
+            ),
+        }
+
+    def pretty_print_cost_stats(self):
+        """
+        Pretty prints cost statistics for this world.
+        """
+        stats = self.get_cost_stats()
+        print("\n" + "=" * 60)
+        print(f"TINYWORLD COST STATISTICS: {self.name}")
+        print("=" * 60)
+        print(f"Agents: {stats['num_agents']:,}")
+        print(f"Steps:  {stats['num_steps']:,}")
+        for key, value in stats["base_stats"].items():
+            print(f"{key}: {value:,}")
+        print("=" * 60 + "\n")
+
+    @staticmethod
+    def get_global_cost_stats():
+        """
+        Returns client cost statistics aggregated across registered worlds.
+        """
+        base_stats = client().get_cost_stats()
+        environments = list(TinyWorld.all_environments.values())
+        total_agents = sum(len(environment.agents) for environment in environments)
+        total_steps = sum(getattr(environment, "_num_steps", 0) for environment in environments)
+
+        return {
+            "base_stats": base_stats,
+            "total_agents": total_agents,
+            "total_steps": total_steps,
+            "total_environments": len(environments),
+            "per_agent": TinyWorld._divide_cost_stats(base_stats, total_agents),
+            "per_step": TinyWorld._divide_cost_stats(base_stats, total_steps),
+            "per_agent_per_step": TinyWorld._divide_cost_stats(
+                base_stats, total_agents * total_steps
+            ),
+        }
+
+    @staticmethod
+    def pretty_print_global_cost_stats():
+        """
+        Pretty prints global cost statistics for all registered worlds.
+        """
+        stats = TinyWorld.get_global_cost_stats()
+        print("\n" + "=" * 60)
+        print("TINYWORLD GLOBAL COST STATISTICS")
+        print("=" * 60)
+        print(f"Total environments:   {stats['total_environments']:,}")
+        print(f"Total agents:         {stats['total_agents']:,}")
+        print(f"Total steps:          {stats['total_steps']:,}")
+        for key, value in stats["base_stats"].items():
+            print(f"{key}: {value:,}")
+        print("=" * 60 + "\n")
     
     @transactional()
     def skip(self, steps: int, timedelta_per_step=None):

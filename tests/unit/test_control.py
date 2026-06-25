@@ -13,6 +13,7 @@ from tinytroupe.agent import TinyPerson, TinyToolUse
 from tinytroupe.environment import TinyWorld
 from tinytroupe.control import Simulation
 import tinytroupe.control as control
+from tinytroupe import config_manager
 from tinytroupe.factory import TinyPersonFactory
 from tinytroupe.enrichment import TinyEnricher
 from tinytroupe.extraction import ArtifactExporter
@@ -25,7 +26,22 @@ import importlib
 
 from testing_utils import *
 
+def _missing_live_llm_backend():
+    api_type = (config_manager.get("api_type") or "").lower()
+    if api_type == "openai":
+        return not os.environ.get("OPENAI_API_KEY")
+    if api_type == "azure":
+        return not os.environ.get("AZURE_OPENAI_API_KEY")
+    return False
+
+
+requires_live_llm = pytest.mark.skipif(
+    _missing_live_llm_backend(),
+    reason="Live LLM checkpoint test requires credentials, or use TINYTROUPE_CONFIG=tests/config_ollama.ini",
+)
+
 @pytest.mark.core
+@requires_live_llm
 def test_begin_checkpoint_end_with_agent_only(setup):
     # erase the file if it exists
     remove_file_if_exists("control_test.cache.json")
@@ -71,6 +87,7 @@ def test_begin_checkpoint_end_with_agent_only(setup):
     assert control._current_simulations["default"].status == Simulation.STATUS_STOPPED, "The simulation should be ended at this point."
 
 @pytest.mark.core
+@requires_live_llm
 def test_begin_checkpoint_end_with_world(setup):
     # erase the file if it exists
     remove_file_if_exists("control_test_world.cache.json")
@@ -102,6 +119,7 @@ def test_begin_checkpoint_end_with_world(setup):
 
 
 @pytest.mark.core
+@requires_live_llm
 def test_begin_checkpoint_end_with_factory(setup):
     # erase the file if it exists
     remove_file_if_exists("control_test_personfactory.cache.json")
@@ -303,58 +321,29 @@ def test_cache_key_generation_and_hits(setup, caplog):
     assert key_nested1 == key_nested2
     assert key_nested1 != key_nested3
 
-    # Test 6: Fallback test for unpickleable objects
-    unpickleable_lambda = lambda x: x
-    original_pickle_dumps = control.pickle.dumps
+    # Test 6: Callable objects are canonicalized on the primary path
+    callable_1 = lambda x: x
+    callable_2 = lambda y: y * 2
 
-    # Mock pickle.dumps to raise an error for this specific test section
-    def mock_pickle_raiser_for_lambda_test(obj_to_pickle, protocol):
-        # Check if the object to pickle contains our specific lambda
-        # This is a bit heuristic; depends on the structure passed to pickle.dumps
-        if isinstance(obj_to_pickle, tuple) and len(obj_to_pickle) > 1: # (name, args, sorted_kwargs)
-            args_tuple = obj_to_pickle[1]
-            if args_tuple and callable(args_tuple[0]) and args_tuple[0].__name__ == "<lambda>":
-                raise TypeError("Mocked Unpickleable Lambda")
-        return original_pickle_dumps(obj_to_pickle, protocol=protocol)
-
-    control.pickle.dumps = mock_pickle_raiser_for_lambda_test
     caplog.clear()
-    # Set level to DEBUG to ensure both ERROR and WARNING are captured for checking
     with caplog.at_level(logging.DEBUG):
-        key_unpickleable1 = sim_for_hash_test._function_call_hash("method_lambda", unpickleable_lambda, kwarg1="test_fallback")
+        key_callable_1 = sim_for_hash_test._function_call_hash("method_lambda", callable_1, kwarg1="test_callable")
+        key_callable_1_repeat = sim_for_hash_test._function_call_hash("method_lambda", callable_1, kwarg1="test_callable")
+        key_callable_2 = sim_for_hash_test._function_call_hash("method_lambda", callable_2, kwarg1="test_callable")
 
-        error_log_found = any(
-            "Error pickling/hashing event" in rec.message and rec.levelname == 'ERROR' for rec in caplog.records
-        )
         error_records = [rec for rec in caplog.records if rec.levelname == 'ERROR']
         warning_records = [rec for rec in caplog.records if rec.levelname == 'WARNING']
 
-        assert len(error_records) >= 1, "Expected at least one error log for pickling failure."
-        assert "Error pickling/hashing event" in error_records[0].message
-
-        assert len(warning_records) == 1, f"Expected 1 warning log, got {len(warning_records)}. Full log: {caplog.text}"
-        assert "FALLBACK_CACHE_KEY_USED" in warning_records[0].message
-        assert "method_lambda" in key_unpickleable1 # Check it's a hash of string rep (contains method name at least)
-
-    caplog.clear()
-    with caplog.at_level(logging.DEBUG):
-        key_unpickleable2 = sim_for_hash_test._function_call_hash("method_lambda", lambda y: y*2, kwarg1="test_fallback")
-        
-        error_records_2 = [rec for rec in caplog.records if rec.levelname == 'ERROR']
-        warning_records_2 = [rec for rec in caplog.records if rec.levelname == 'WARNING']
-
-        assert len(error_records_2) >= 1, "Expected at least one error log for pickling failure (call 2)."
-        assert "Error pickling/hashing event" in error_records_2[0].message
-
-        assert len(warning_records_2) == 1, f"Expected 1 warning log (call 2), got {len(warning_records_2)}. Full log: {caplog.text}"
-        assert "FALLBACK_CACHE_KEY_USED" in warning_records_2[0].message
-        assert key_unpickleable1 != key_unpickleable2
-
-    control.pickle.dumps = original_pickle_dumps # Restore
+        assert key_callable_1 == key_callable_1_repeat
+        assert key_callable_1 != key_callable_2
+        assert len(key_callable_1) == 64
+        assert not error_records
+        assert not warning_records
 
     # No need for control.begin/end or cache file for direct hash testing.
     # control.end()
     # remove_file_if_exists(cache_file) # No cache file used
+@requires_live_llm
 def test_begin_checkpoint_end_with_factory_demography(setup):
     # erase the file if it exists
     remove_file_if_exists("control_test_personfactory_demography.cache.json")
@@ -454,5 +443,3 @@ def test_begin_checkpoint_end_with_factory_demography(setup):
     # so they don't create separate cache entries. The parent transaction caches their results properly.
     assert "'define'" not in cache_contents, "The cache file should not contain the 'define' methods, as these are reentrant."
     assert "'define_several'" not in cache_contents, "The cache file should not contain the 'define_several' methods, as these are reentrant."
-
-

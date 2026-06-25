@@ -1953,3 +1953,42 @@ max_content_length=max_content_length,
         Clears the global list of agents.
         """
         TinyPerson.all_agents = {}
+
+    @staticmethod
+    def get_global_cost_stats():
+        """
+        Returns global LLM cost statistics with agent-level derivatives.
+        """
+        base_stats = client().get_cost_stats()
+        total_agents = len(TinyPerson.all_agents)
+        per_agent = None
+        if total_agents > 0:
+            per_agent = {
+                key: value / total_agents
+                for key, value in base_stats.items()
+                if isinstance(value, (int, float))
+            }
+
+        return {
+            "base_stats": base_stats,
+            "total_agents": total_agents,
+            "per_agent": per_agent,
+        }
+
+    @staticmethod
+    def pretty_print_global_cost_stats():
+        """
+        Pretty prints global LLM cost statistics for all registered agents.
+        """
+        stats = TinyPerson.get_global_cost_stats()
+        print("\n" + "=" * 60)
+        print("TINYPERSON GLOBAL COST STATISTICS")
+        print("=" * 60)
+        print(f"Total agents:         {stats['total_agents']:,}")
+        for key, value in stats["base_stats"].items():
+            print(f"{key}: {value:,}")
+        if stats["per_agent"] is not None:
+            print("Per-agent:")
+            for key, value in stats["per_agent"].items():
+                print(f"  {key}: {value:.2f}")
+        print("=" * 60 + "\n")

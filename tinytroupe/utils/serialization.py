@@ -8,6 +8,7 @@ so the primary path succeeds without fallbacks.
 """
 import pickle
 import hashlib
+import inspect
 import json
 import threading
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -19,6 +20,15 @@ logger = logging.getLogger("tinytroupe")
 
 # Registry for custom serializers for specific types
 _custom_serializers: Dict[type, Callable[[Any], Any]] = {}
+
+_THREAD_PRIMITIVE_TYPES = (
+    type(threading.Lock()),
+    type(threading.RLock()),
+    threading.Condition,
+    threading.Event,
+    threading.Semaphore,
+    threading.Thread,
+)
 
 
 def register_serializer(obj_type: type, serializer: Callable[[Any], Any]) -> None:
@@ -128,34 +138,33 @@ def make_canonical(data: Any) -> Any:
         return data
 
     # Threading primitives are unpickleable; use stable placeholder (excluded from cache key content)
-    elif isinstance(
-        data,
-        (
-            threading.Lock,
-            threading.RLock,
-            threading.Condition,
-            threading.Event,
-            threading.Semaphore,
-            threading.Thread,
-        ),
-    ):
+    elif isinstance(data, _THREAD_PRIMITIVE_TYPES):
         return ("__thread_primitive__", type(data).__name__)
+
+    elif inspect.isfunction(data) or inspect.ismethod(data) or inspect.isbuiltin(data):
+        code = getattr(data, "__code__", None)
+        code_marker = None
+        if code is not None:
+            code_marker = (
+                code.co_filename,
+                code.co_firstlineno,
+                code.co_name,
+                code.co_code,
+                tuple(repr(const) for const in code.co_consts),
+                code.co_names,
+            )
+        return (
+            "__callable__",
+            getattr(data, "__module__", None),
+            getattr(data, "__qualname__", getattr(data, "__name__", type(data).__name__)),
+            code_marker,
+        )
 
     # For custom objects, canonicalize __dict__ but exclude unpickleable attributes
     elif hasattr(data, "__dict__"):
         filtered = {}
         for k, v in data.__dict__.items():
-            if isinstance(
-                v,
-                (
-                    threading.Lock,
-                    threading.RLock,
-                    threading.Condition,
-                    threading.Event,
-                    threading.Semaphore,
-                    threading.Thread,
-                ),
-            ):
+            if isinstance(v, _THREAD_PRIMITIVE_TYPES):
                 continue
             try:
                 filtered[k] = make_canonical(v)
