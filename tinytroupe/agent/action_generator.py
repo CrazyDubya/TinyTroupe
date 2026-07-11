@@ -464,6 +464,34 @@ class ActionGenerator(JsonSerializableRegistry):
         elif isinstance(content, dict) and "action" in content:
             action = content["action"]
             return action, role, content
+        elif isinstance(content, dict) and "type" in content and "content" in content:
+            atype = content.get("type")
+            # Salvage flattened structure only when type looks like a valid action
+            if isinstance(atype, str) and atype.isupper():
+                action = {
+                    "type": atype,
+                    "content": content["content"],
+                    "target": content.get("target", ""),
+                }
+                fallback_content = {
+                    "action": action,
+                    "cognitive_state": content.get("cognitive_state") or {},
+                }
+                logger.info(f"[{agent.name}] Salvaged flattened action structure (type={atype})")
+                return action, role, fallback_content
+        elif isinstance(content, str) and content.strip():
+            # Fallback: model returned plain text instead of JSON (common with local models)
+            talk_content = content.strip().strip('"').strip("'")
+            if len(talk_content) > 500:
+                talk_content = talk_content[:497] + "..."
+            fallback_content = {
+                "action": {"type": "TALK", "content": talk_content, "target": ""},
+                "cognitive_state": {"goals": [], "context": [], "attention": "", "emotions": ""},
+            }
+            logger.info(
+                f"[{agent.name}] Model returned plain text; wrapping as TALK action (len={len(talk_content)})"
+            )
+            return {"type": "TALK", "content": talk_content, "target": ""}, role, fallback_content
         else:
             # Neither key present — log and raise so @repeat_on_error can retry
             keys = list(content.keys()) if isinstance(content, dict) else []
@@ -527,44 +555,7 @@ class ActionGenerator(JsonSerializableRegistry):
     def _has_multimodal_content(messages: list) -> bool:
         """Return True if any message has list-typed (multimodal) content."""
         return any(isinstance(m.get("content"), list) for m in messages)
-=======
-        elif isinstance(content, dict) and "action" in content:
-            action = content["action"]
-            return action, role, content
-        elif isinstance(content, dict) and "type" in content and "content" in content:
-            atype = content.get("type")
-            # Salvage flattened structure only when type looks like a valid action
-            if isinstance(atype, str) and atype.isupper():
-                action = {
-                    "type": atype,
-                    "content": content["content"],
-                    "target": content.get("target", ""),
-                }
-                fallback_content = {
-                    "action": action,
-                    "cognitive_state": content.get("cognitive_state") or {},
-                }
-                logger.info(f"[{agent.name}] Salvaged flattened action structure (type={atype})")
-                return action, role, fallback_content
-        elif isinstance(content, str) and content.strip():
-            # Fallback: model returned plain text instead of JSON (common with local models)
-            talk_content = content.strip().strip('"').strip("'")
-            if len(talk_content) > 500:
-                talk_content = talk_content[:497] + "..."
-            fallback_content = {
-                "action": {"type": "TALK", "content": talk_content, "target": ""},
-                "cognitive_state": {"goals": [], "context": [], "attention": "", "emotions": ""},
-            }
-            logger.info(
-                f"[{agent.name}] Model returned plain text; wrapping as TALK action (len={len(talk_content)})"
-            )
-            return {"type": "TALK", "content": talk_content, "target": ""}, role, fallback_content
-        else:
-            raise ValueError(
-                f"LLM response missing expected 'action' or 'actions' keys. "
-                f"Got keys: {list(content.keys()) if isinstance(content, dict) else 'non-dict'}"
-            )
->>>>>>> wip/cleanup-snapshot-2026-05-20
+
 
     ###############################################################################################
     # Quality evaluation methods

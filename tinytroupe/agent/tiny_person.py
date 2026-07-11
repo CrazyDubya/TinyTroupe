@@ -763,86 +763,85 @@ class TinyPerson(JsonSerializableRegistry):
             while (len(contents) == 0) or (
                 not contents[-1]["action"]["type"] == "DONE"
             ):
-            # ----------------------------------------------------------------
-            # Build the list of stimulus payloads to send as user messages.
-            #
-            # Cognitive motivation (recency bias — Murdock, 1962):
-            #   The most recent image-bearing stimuli are re-injected so that
-            #   the agent can re-examine previously seen images even after
-            #   intervening non-visual stimuli.  Only the *most recent*
-            #   ``MAX_IMAGE_STIMULI_TO_RECALL`` image-bearing stimuli are
-            #   kept, reflecting the primacy of recent experience in
-            #   short-term visual memory.
-            #
-            # The returned list is in chronological order so that the LLM
-            # sees older context first and the newest stimulus last.
-            # ----------------------------------------------------------------
-            def _stimuli_payloads_for_current_turn():
-                """Return a chronologically ordered list of stimulus payloads.
+                # ----------------------------------------------------------------
+                # Build the list of stimulus payloads to send as user messages.
+                #
+                # Cognitive motivation (recency bias — Murdock, 1962):
+                #   The most recent image-bearing stimuli are re-injected so that
+                #   the agent can re-examine previously seen images even after
+                #   intervening non-visual stimuli.  Only the *most recent*
+                #   ``MAX_IMAGE_STIMULI_TO_RECALL`` image-bearing stimuli are
+                #   kept, reflecting the primacy of recent experience in
+                #   short-term visual memory.
+                #
+                # The returned list is in chronological order so that the LLM
+                # sees older context first and the newest stimulus last.
+                # ----------------------------------------------------------------
+                def _stimuli_payloads_for_current_turn():
+                    """Return a chronologically ordered list of stimulus payloads.
 
-                The list always ends with the latest stimulus (of any type).
-                Before it, up to ``MAX_IMAGE_STIMULI_TO_RECALL`` recent
-                image-bearing stimuli are included (unless the latest is
-                already one of them — no duplicates).
-                """
-                try:
-                    recent = self.episodic_memory.retrieve_recent()
-                except Exception:
-                    return []
+                    The list always ends with the latest stimulus (of any type).
+                    Before it, up to ``MAX_IMAGE_STIMULI_TO_RECALL`` recent
+                    image-bearing stimuli are included (unless the latest is
+                    already one of them — no duplicates).
+                    """
+                    try:
+                        recent = self.episodic_memory.retrieve_recent()
+                    except Exception:
+                        return []
 
-                if not recent:
-                    return []
+                    if not recent:
+                        return []
 
-                # --- locate the latest stimulus ---
-                latest_payload = None
-                latest_idx = None
-                for i, msg in enumerate(reversed(recent)):
-                    if msg.get("role") == "user" and msg.get("type") == "stimulus":
-                        latest_payload = msg.get("content")
-                        latest_idx = len(recent) - 1 - i
-                        break
-
-                if latest_payload is None:
-                    return []
-
-                # --- collect image-bearing stimuli (chronological order) ---
-                max_recall = TinyPerson.MAX_IMAGE_STIMULI_TO_RECALL
-                image_payloads = []   # list of (idx, payload)
-                for idx, msg in enumerate(recent):
-                    if msg.get("role") != "user" or msg.get("type") != "stimulus":
-                        continue
-                    content = msg.get("content")
-                    if not isinstance(content, dict):
-                        continue
-                    # Check if any stimulus in this message carries images
-                    for stim in content.get("stimuli", []):
-                        if stim.get("images"):
-                            image_payloads.append((idx, content))
+                    # --- locate the latest stimulus ---
+                    latest_payload = None
+                    latest_idx = None
+                    for i, msg in enumerate(reversed(recent)):
+                        if msg.get("role") == "user" and msg.get("type") == "stimulus":
+                            latest_payload = msg.get("content")
+                            latest_idx = len(recent) - 1 - i
                             break
 
-                # Keep only the most recent N (recency bias)
-                if len(image_payloads) > max_recall:
-                    image_payloads = image_payloads[-max_recall:]
+                    if latest_payload is None:
+                        return []
 
-                # --- merge into chronological list, avoiding duplicates ---
-                payloads = []
-                seen_indices = set()
-                for idx, payload in image_payloads:
-                    if idx != latest_idx and idx not in seen_indices:
-                        payloads.append(payload)
-                        seen_indices.add(idx)
-                # Latest always comes last
-                payloads.append(latest_payload)
-                return payloads
+                    # --- collect image-bearing stimuli (chronological order) ---
+                    max_recall = TinyPerson.MAX_IMAGE_STIMULI_TO_RECALL
+                    image_payloads = []   # list of (idx, payload)
+                    for idx, msg in enumerate(recent):
+                        if msg.get("role") != "user" or msg.get("type") != "stimulus":
+                            continue
+                        content = msg.get("content")
+                        if not isinstance(content, dict):
+                            continue
+                        # Check if any stimulus in this message carries images
+                        for stim in content.get("stimuli", []):
+                            if stim.get("images"):
+                                image_payloads.append((idx, content))
+                                break
 
-            for payload in _stimuli_payloads_for_current_turn():
-                self.current_messages.append(
-                    {
-                        "role": "user",
-                        "content": payload,  # dict will be JSON-serialized by the generator
-                    }
-                )
+                    # Keep only the most recent N (recency bias)
+                    if len(image_payloads) > max_recall:
+                        image_payloads = image_payloads[-max_recall:]
 
+                    # --- merge into chronological list, avoiding duplicates ---
+                    payloads = []
+                    seen_indices = set()
+                    for idx, payload in image_payloads:
+                        if idx != latest_idx and idx not in seen_indices:
+                            payloads.append(payload)
+                            seen_indices.add(idx)
+                    # Latest always comes last
+                    payloads.append(latest_payload)
+                    return payloads
+
+                for payload in _stimuli_payloads_for_current_turn():
+                    self.current_messages.append(
+                        {
+                            "role": "user",
+                            "content": payload,  # dict will be JSON-serialized by the generator
+                        }
+                    )
 
                 # check if the agent is acting without ever stopping
                 if len(contents) > TinyPerson.MAX_ACTIONS_BEFORE_DONE:

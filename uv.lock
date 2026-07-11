@@ -5696,7 +5696,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/17/82/86982e4b6d16e4feb
 
 [[package]]
 name = "tinytroupe"
-version = "0.6.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "chevron" },
