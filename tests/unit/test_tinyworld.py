@@ -44,8 +44,17 @@ def test_run(setup, focus_group_world):
                 action_content = msg['content']['action'].get('content', '')
                 if action_content:  # Only check if there's content
                     assert proposition_holds(action_content + " - The message relates to AI products, technology, or innovation")
-            
-            # TODO stimulus integrity check?
+    # Stimulus integrity: at least one agent should have received the broadcast
+    broadcast_received = False
+    for agent in world_2.agents:
+        for msg in agent.episodic_memory.retrieve_all():
+            for s in msg.get('content', {}).get('stimuli', []):
+                if 'content' in s and 'Discuss ideas for a new AI product' in s['content']:
+                    broadcast_received = True
+                    break
+        if broadcast_received:
+            break
+    assert broadcast_received, "At least one agent should have received the broadcast stimulus"
         
 
 @pytest.mark.core

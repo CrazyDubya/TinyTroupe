@@ -47,31 +47,37 @@ class InterventionBatch:
 
 
 
-# TODO under development
-# Class-level comment on serialization limitations:
-# Note: For deserialized instances, `targets`, `precondition_func`, `effect_func`,
-# and `_last_text_precondition_proposition` will not be automatically restored due to
-# complexities in serializing/deserializing functions and full object references.
-# These may need to be re-assigned or re-hydrated manually after deserialization.
 class Intervention(JsonSerializableRegistry):
+    """
+    Event-based intervention on agents or worlds. Only name, text_precondition,
+    first_n, and last_n are serialized.
+
+    Serialization limitations: After deserialization, the following attributes
+    are NOT restored and must be rehydrated manually if needed:
+      - targets: Re-assign with intervention.targets = [agent1, agent2, ...]
+      - precondition_func: Re-assign with intervention.set_functional_precondition(func)
+      - effect_func: Re-assign with intervention.set_effect(effect_func)
+      - _last_text_precondition_proposition: Internal cache; will be repopulated on next check
+    """
+
     serializable_attributes = ["name", "text_precondition", "first_n", "last_n"]
 
-
-    def __init__(self, targets: Union[TinyPerson, 'TinyWorld', List[TinyPerson], List['TinyWorld']],
-                 first_n:int=DEFAULT_FIRST_N, last_n:int=DEFAULT_LAST_N,
-                 name: str = None):
+    def __init__(
+        self,
+        targets: Union[TinyPerson, "TinyWorld", List[TinyPerson], List["TinyWorld"]],
+        first_n: int = DEFAULT_FIRST_N,
+        last_n: int = DEFAULT_LAST_N,
+        name: str = None,
+    ):
         """
         Initialize the intervention.
 
         Args:
-            target (Union[TinyPerson, TinyWorld, List[TinyPerson], List[TinyWorld]]): the target to intervene on
-            first_n (int): the number of first interactions to consider in the context
-            last_n (int): the number of last interactions (most recent) to consider in the context
-            name (str): the name of the intervention
+            targets: The target(s) to intervene on (TinyPerson or TinyWorld).
+            first_n: Number of first interactions to consider in context.
+            last_n: Number of last (most recent) interactions to consider.
+            name: Name of the intervention.
         """
-        # TODO: Add a note in __init__ or class docstring about serialization limitations
-        # for targets, precondition_func, effect_func for deserialized instances.
-        # For now, this is covered by the class-level comment.
         
         self.targets = targets
         

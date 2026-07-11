@@ -1,3 +1,4 @@
+import os
 import pytest
 from unittest.mock import MagicMock
 
@@ -172,11 +173,15 @@ def test_repeat_on_error():
     assert dummy_function.call_count == 1
 
 
-# TODO
-#def test_json_serializer():
 
 
 def test_llm_decorator():
+    from tinytroupe import config_manager
+
+    api_type = config_manager.get("api_type")
+    if api_type == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set; use Ollama config or set key to run LLM decorator test")
+
     @llm(temperature=0.5)
     def joke():
         return "Tell me a joke."

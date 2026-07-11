@@ -1,10 +1,11 @@
-from tinytroupe.agent import logger, default, Self, AgentOrWorld, CognitiveActionModel
+from tinytroupe import config_manager, default
+from tinytroupe.agent import logger, Self, AgentOrWorld, CognitiveActionModel
 from tinytroupe.agent.memory import EpisodicMemory, SemanticMemory, EpisodicConsolidator
-import tinytroupe.openai_utils as openai_utils
+from tinytroupe.clients import client
+from tinytroupe import openai_utils
 from tinytroupe.utils import JsonSerializableRegistry, repeat_on_error, name_or_empty
 import tinytroupe.utils as utils
 from tinytroupe.control import transactional, current_simulation
-from tinytroupe import config_manager
 
 import copy
 import hashlib
@@ -614,7 +615,8 @@ class TinyPerson(JsonSerializableRegistry):
         Args:
             until_done (bool): Whether to keep acting until the agent is done and needs additional stimuli.
             n (int): The number of actions to perform. Defaults to None.
-            return_actions (bool): Whether to return the actions or not. Defaults to False.
+            return_actions (bool): Whether to return the actions list. Use True when you need
+                the actions (e.g. epic simulations, scripts). Defaults to False (returns self for chaining).
             max_content_length (int): The maximum length of the content to display. Defaults to None, which uses the global configuration value.
             communication_display (bool): Whether to display the communication or not, will override the global setting if provided. Defaults to None.
         """
@@ -626,14 +628,6 @@ class TinyPerson(JsonSerializableRegistry):
 
         contents = []
 
-        # A separate function to run before each action, which is not meant to be repeated in case of errors.
-        def aux_pre_act():
-            # TODO maybe we don't need this at all anymore?
-            #
-            # A quick thought before the action. This seems to help with better model responses, perhaps because
-            # it interleaves user with assistant messages.
-            pass # self.think("I will now think, reflect and act a bit, and then issue DONE.")        
-
         # Aux function to perform exactly one action.
         # Occasionally, the model will return JSON missing important keys, so we just ask it to try again
         # Sometimes `content` contains EpisodicMemory's MEMORY_BLOCK_OMISSION_INFO message, which raises a TypeError on line 443
@@ -642,26 +636,33 @@ class TinyPerson(JsonSerializableRegistry):
             # ensure we have the latest prompt (initial system message + selected messages from memory)
             self.reset_prompt()
             
-            action, role, content, all_negative_feedbacks = self.action_generator.generate_next_action(self, self.current_messages)
-            logger.debug(f"{self.name}'s action: {action}")
+            action_or_actions, role, content, all_negative_feedbacks = self.action_generator.generate_next_action(self, self.current_messages)
+            # Normalize: multi-action returns a list; ensure we have a list to iterate
+            if isinstance(action_or_actions, list):
+                actions_to_process = action_or_actions
+            else:
+                actions_to_process = [action_or_actions]
+            logger.debug(f"{self.name}'s action: {action_or_actions}")
 
-            # check the next action similarity, and if it is too similar, put a system warning instruction in memory too
-            next_action_similarity = utils.next_action_jaccard_similarity(self, action)
+            # Process each action in the batch (multi-action output)
+            processed_actions = []
+            for idx, action in enumerate(actions_to_process):
+                if not isinstance(action, dict):
+                    continue
+                # check the next action similarity, and if it is too similar, put a system warning instruction in memory too
+                # exempt tool actions (e.g. WRITE_DOCUMENT) - replacing them would discard side effects
+                action_type = action.get("type", "")
+                skip_similarity_replacement = action_type == "WRITE_DOCUMENT"
+                next_action_similarity = utils.next_action_jaccard_similarity(self, action)
 
-            # we have a redundant repetition check here, because this an be computed quickly and is often very useful.
-            if self.enable_basic_action_repetition_prevention and \
-               (TinyPerson.MAX_ACTION_SIMILARITY is not None) and (next_action_similarity > TinyPerson.MAX_ACTION_SIMILARITY):
-                
-                logger.warning(f"[{self.name}] Action similarity is too high ({next_action_similarity}), replacing it with DONE.")
+                # we have a redundant repetition check here, because this an be computed quickly and is often very useful.
+                if not skip_similarity_replacement and self.enable_basic_action_repetition_prevention and \
+                   (TinyPerson.MAX_ACTION_SIMILARITY is not None) and (next_action_similarity > TinyPerson.MAX_ACTION_SIMILARITY):
 
-                # replace the action with a DONE
-                action = {"type": "DONE", "content": "", "target": ""}
-                content["action"] = action	
-                content["cognitive_state"] = {}
-
-                self.store_in_memory({'role': 'system', 
-                                    'content': \
-                                        f"""
+                    logger.warning(f"[{self.name}] Action similarity is too high ({next_action_similarity}), replacing it with DONE.")
+                    action = {"type": "DONE", "content": "", "target": ""}
+                    self.store_in_memory({'role': 'system',
+                                        'content': f"""
                                         # EXCESSIVE ACTION SIMILARITY WARNING
 
                                         You were about to generate a repetitive action (jaccard similarity = {next_action_similarity}).
@@ -672,39 +673,46 @@ class TinyPerson(JsonSerializableRegistry):
                                         - produce more diverse actions.
                                         - aggregate similar actions into a single, larger, action and produce it all at once.
                                         - as a **last resort only**, you may simply not acting at all by issuing a DONE.
-
-                                        
                                         """,
-                                    'type': 'feedback',
-                                    'simulation_timestamp': self.iso_datetime()})
+                                        'type': 'feedback',
+                                        'simulation_timestamp': self.iso_datetime()})
+                processed_actions.append(action)
 
-            # All checks done, we can commit the action to memory.
-            self.store_in_memory({'role': role, 'content': content,
+            # Build content for storage: ensure "action" exists for loop termination check
+            last_action = processed_actions[-1] if processed_actions else {"type": "DONE", "content": "", "target": ""}
+            cognitive_state = content.get("cognitive_state", {})
+
+            # Store full batch in memory once
+            content_to_store = {**content, "action": last_action} if "action" not in content else content
+            self.store_in_memory({'role': role, 'content': content_to_store,
                                     'type': 'action',
                                     'simulation_timestamp': self.iso_datetime()})
 
             # Thread-safe state modifications
             with self._state_lock:
-                self._actions_buffer.append(action)
+                for action in processed_actions:
+                    self._actions_buffer.append(action)
 
-                if "cognitive_state" in content:
-                    cognitive_state = content["cognitive_state"]
+                if cognitive_state:
                     logger.debug(f"[{self.name}] Cognitive state: {cognitive_state}")
-
                     self._update_cognitive_state(goals=cognitive_state.get("goals", None),
                                                  context=cognitive_state.get("context", None),
                                                  attention=cognitive_state.get("emotions", None),
                                                  emotions=cognitive_state.get("emotions", None))
 
-            contents.append(content)
-            if utils.first_non_none(communication_display, TinyPerson.communication_display):
-                self._display_communication(role=role, content=content, kind='action', simplified=True, max_content_length=max_content_length)
+            # Append one content per action so contains_action_type etc. can find each (e.g. WRITE_DOCUMENT)
+            for action in processed_actions:
+                item = {"action": action, "cognitive_state": cognitive_state}
+                contents.append(item)
+                if utils.first_non_none(communication_display, TinyPerson.communication_display):
+                    self._display_communication(role=role, content=item, kind='action', simplified=True, max_content_length=max_content_length)
+            if not processed_actions:
+                contents.append({"action": last_action, "cognitive_state": cognitive_state})
 
-            #
-            # Some actions induce an immediate stimulus or other side-effects. We need to process them here, by means of the mental faculties.
-            #
-            for faculty in self._mental_faculties:
-                faculty.process_action(self, action)
+            # Some actions induce an immediate stimulus or other side-effects. Process each via mental faculties.
+            for action in processed_actions:
+                for faculty in self._mental_faculties:
+                    faculty.process_action(self, action)
             
             #
             # turns all_negative_feedbacks list into a system message
@@ -748,7 +756,6 @@ class TinyPerson(JsonSerializableRegistry):
         ##### Option 1: run N actions ######
         if n is not None:
             for i in range(n):
-                aux_pre_act()
                 aux_act_once()
 
         ##### Option 2: run until DONE ######
@@ -847,7 +854,6 @@ class TinyPerson(JsonSerializableRegistry):
                         logger.warning(f"[{self.name}] Agent {self.name} is acting in a loop. This may be a bug. Let's stop it here anyway.")
                         break
 
-                aux_pre_act()
                 aux_act_once()
 
         # The end of a sequence of actions is always considered to mark the end of an episode.
@@ -1172,7 +1178,11 @@ max_content_length=max_content_length,
         communication_display:bool=None
     ):
         """
-        Convenience method that combines the `listen` and `act` methods.
+        Convenience method that combines the `listen` and `act` methods. Synchronous.
+
+        API: This method is synchronous. Use return_actions=True when you need the
+        returned action list (e.g. in scripts or epic simulations). When return_actions=False,
+        the method returns self for chaining.
         """
 
         self.listen(speech, max_content_length=max_content_length, communication_display=communication_display)
@@ -1609,8 +1619,49 @@ max_content_length=max_content_length,
                     "simulation_timestamp": mem.get("simulation_timestamp", self.iso_datetime()),
                 })
 
-    def optimize_memory(self):
-        pass #TODO
+    def reflect_and_synthesize_knowledge(self) -> None:
+        """
+        Reflects on episodic memories and stores extracted insights as synthesized
+        knowledge in semantic memory. Uses the LLM to summarize key learnings.
+        """
+        import time
+        episodes = self.episodic_memory.retrieve_all()
+        if not episodes:
+            logger.debug(f"[{self.name}] No episodes to reflect on.")
+            return
+        ts = str(time.time())
+        summary = json.dumps(
+            [e.get("content", e) if isinstance(e.get("content"), (str, dict)) else str(e) for e in episodes[-20:]],
+            default=str,
+        )[:8000]
+        prompt = [
+            {"role": "system", "content": "Extract key insights or learnings from the following episodic memories. Return ONLY a JSON array of strings, e.g. [\"insight 1\", \"insight 2\"]. No other text."},
+            {"role": "user", "content": f"Episodic memories:\n{summary}"},
+        ]
+        try:
+            resp = client().send_message(prompt)
+            raw = resp.get("content") or ""
+            parsed = utils.extract_json(raw)
+            insights = parsed if isinstance(parsed, list) else []
+            for s in insights:
+                if isinstance(s, str) and s.strip():
+                    self.semantic_memory.store({
+                        "type": "synthesized_knowledge",
+                        "content": s.strip(),
+                        "source_reflection_timestamp": ts,
+                        "reflected_episodes_count": len(episodes),
+                    })
+        except Exception as e:
+            logger.warning(f"[{self.name}] Reflection failed: {e}")
+
+    def optimize_memory(self) -> bool:
+        """
+        Triggers memory optimization (e.g. consolidation) when beneficial.
+        Returns True if optimization was performed, False otherwise.
+        """
+        if self.should_consolidate():
+            return self.consolidate_episode_memories(force=True, is_automatic=False)
+        return False
 
     def clear_episodic_memory(self, max_prefix_to_clear=None, max_suffix_to_clear=None):
         """
@@ -2200,8 +2251,9 @@ max_content_length=max_content_length,
         """
         to_copy = copy.copy(self.__dict__)
 
-        # delete the logger and other attributes that cannot be serialized
-        del to_copy["environment"]
+        # delete attributes that cannot be serialized (locks, refs, etc.)
+        for key in ("environment", "_state_lock", "_memory_lock", "_consolidation_lock"):
+            to_copy.pop(key, None)
         del to_copy["_mental_faculties"]
         del to_copy["action_generator"]
 
@@ -2309,3 +2361,42 @@ max_content_length=max_content_length,
         Clears the global list of agents.
         """
         TinyPerson.all_agents = {}
+
+    @staticmethod
+    def get_global_cost_stats():
+        """
+        Returns global LLM cost statistics with agent-level derivatives.
+        """
+        base_stats = client().get_cost_stats()
+        total_agents = len(TinyPerson.all_agents)
+        per_agent = None
+        if total_agents > 0:
+            per_agent = {
+                key: value / total_agents
+                for key, value in base_stats.items()
+                if isinstance(value, (int, float))
+            }
+
+        return {
+            "base_stats": base_stats,
+            "total_agents": total_agents,
+            "per_agent": per_agent,
+        }
+
+    @staticmethod
+    def pretty_print_global_cost_stats():
+        """
+        Pretty prints global LLM cost statistics for all registered agents.
+        """
+        stats = TinyPerson.get_global_cost_stats()
+        print("\n" + "=" * 60)
+        print("TINYPERSON GLOBAL COST STATISTICS")
+        print("=" * 60)
+        print(f"Total agents:         {stats['total_agents']:,}")
+        for key, value in stats["base_stats"].items():
+            print(f"{key}: {value:,}")
+        if stats["per_agent"] is not None:
+            print("Per-agent:")
+            for key, value in stats["per_agent"].items():
+                print(f"  {key}: {value:.2f}")
+        print("=" * 60 + "\n")

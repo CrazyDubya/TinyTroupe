@@ -1,4 +1,6 @@
-from tinytroupe.environment import logger, default # logger is imported here
+import logging
+logger = logging.getLogger("tinytroupe")
+from tinytroupe import default
 
 import copy
 from datetime import datetime, timedelta
@@ -9,13 +11,13 @@ import time
 import threading
 
 from tinytroupe.agent import *
+from tinytroupe.clients import client
 from tinytroupe.utils import name_or_empty, pretty_datetime
 import tinytroupe.control as control
 from tinytroupe.control import transactional
 from tinytroupe import utils, config_manager
 
-# Added import for Intervention
-from tinytroupe.steering.intervention import Intervention
+# Intervention imported lazily where needed to avoid circular import
 
 
 
@@ -92,6 +94,7 @@ class TinyWorld:
         self._max_additional_targets_to_display = max_additional_targets_to_display
 
         self.console = Console()
+        self._num_steps = 0
 
         # Parallel execution metrics
         self._parallel_metrics = {
@@ -112,17 +115,19 @@ class TinyWorld:
     # Simulation control methods
     #######################################################################
     @transactional()
-    def _step(self, 
-              timedelta_per_step=None, 
+    def _step(self,
+              timedelta_per_step=None,
               randomize_agents_order=True,
-              parallelize=True): # TODO have a configuration for parallelism?
+              parallelize=None):
         """
         Performs a single step in the environment. This default implementation
         simply calls makes all agents in the environment act and properly
-        handle the resulting actions. Subclasses might override this method to implement 
+        handle the resulting actions. Subclasses might override this method to implement
         different policies.
         """
-        
+        if parallelize is None:
+            parallelize = config_manager.get("parallel_agent_actions", True)
+
         # Increase current datetime if timedelta is given. This must happen before
         # any other simulation updates, to make sure that the agents are acting
         # in the correct time, particularly if only one step is being run.
@@ -136,7 +141,7 @@ class TinyWorld:
             should_apply_intervention = intervention.check_precondition()
             if should_apply_intervention:
                 if TinyWorld.communication_display:
-                    self._display_intervention_communication(intervention)
+                    self._log_intervention_communication(intervention)
                 intervention.apply_effect()
                 
                 logger.debug(f"[{self.name}] Intervention '{intervention.name}' was applied.")
@@ -305,13 +310,95 @@ class TinyWorld:
             logger.info(f"[{self.name}] Running world simulation step {i+1} of {steps}.")
 
             if TinyWorld.communication_display:
-                self._display_step_communication(cur_step=i+1, total_steps=steps, timedelta_per_step=timedelta_per_step)
+                self._log_step_communication(cur_step=i+1, total_steps=steps, timedelta_per_step=timedelta_per_step)
 
             agents_actions = self._step(timedelta_per_step=timedelta_per_step, randomize_agents_order=randomize_agents_order, parallelize=parallelize)
             agents_actions_over_time.append(agents_actions)
+            self._num_steps += 1
         
         if return_actions:
             return agents_actions_over_time
+
+    @staticmethod
+    def _divide_cost_stats(base_stats, divisor):
+        if divisor <= 0:
+            return None
+        return {
+            key: value / divisor
+            for key, value in base_stats.items()
+            if isinstance(value, (int, float))
+        }
+
+    def get_cost_stats(self):
+        """
+        Returns client cost statistics plus world-level derivative metrics.
+        """
+        base_stats = client().get_cost_stats()
+        num_agents = len(self.agents)
+        num_steps = getattr(self, "_num_steps", 0)
+
+        return {
+            "base_stats": base_stats,
+            "num_agents": num_agents,
+            "num_steps": num_steps,
+            "per_agent": self._divide_cost_stats(base_stats, num_agents),
+            "per_step": self._divide_cost_stats(base_stats, num_steps),
+            "per_agent_per_step": self._divide_cost_stats(
+                base_stats, num_agents * num_steps
+            ),
+        }
+
+    def pretty_print_cost_stats(self):
+        """
+        Pretty prints cost statistics for this world.
+        """
+        stats = self.get_cost_stats()
+        print("\n" + "=" * 60)
+        print(f"TINYWORLD COST STATISTICS: {self.name}")
+        print("=" * 60)
+        print(f"Agents: {stats['num_agents']:,}")
+        print(f"Steps:  {stats['num_steps']:,}")
+        for key, value in stats["base_stats"].items():
+            print(f"{key}: {value:,}")
+        print("=" * 60 + "\n")
+
+    @staticmethod
+    def get_global_cost_stats():
+        """
+        Returns client cost statistics aggregated across registered worlds.
+        """
+        base_stats = client().get_cost_stats()
+        environments = list(TinyWorld.all_environments.values())
+        total_agents = sum(len(environment.agents) for environment in environments)
+        total_steps = sum(getattr(environment, "_num_steps", 0) for environment in environments)
+
+        return {
+            "base_stats": base_stats,
+            "total_agents": total_agents,
+            "total_steps": total_steps,
+            "total_environments": len(environments),
+            "per_agent": TinyWorld._divide_cost_stats(base_stats, total_agents),
+            "per_step": TinyWorld._divide_cost_stats(base_stats, total_steps),
+            "per_agent_per_step": TinyWorld._divide_cost_stats(
+                base_stats, total_agents * total_steps
+            ),
+        }
+
+    @staticmethod
+    def pretty_print_global_cost_stats():
+        """
+        Pretty prints global cost statistics for all registered worlds.
+        """
+        stats = TinyWorld.get_global_cost_stats()
+        print("\n" + "=" * 60)
+        print("TINYWORLD GLOBAL COST STATISTICS")
+        print("=" * 60)
+        print(f"Total environments:   {stats['total_environments']:,}")
+        print(f"Total agents:         {stats['total_agents']:,}")
+        print(f"Total steps:          {stats['total_steps']:,}")
+        for key, value in stats["base_stats"].items():
+            print(f"{key}: {value:,}")
+        print("=" * 60 + "\n")
     
     @transactional()
     def skip(self, steps: int, timedelta_per_step=None):
@@ -740,8 +827,7 @@ class TinyWorld:
     # Formatting conveniences
     ###########################################################
 
-    # TODO better names for these "display" methods
-    def _display_step_communication(self, cur_step, total_steps, timedelta_per_step=None):
+    def _log_step_communication(self, cur_step, total_steps, timedelta_per_step=None):
         """
         Displays the current communication and stores it in a buffer for later use.
         """
@@ -749,7 +835,7 @@ class TinyWorld:
 
         self._push_and_display_latest_communication({"kind": 'step', "rendering": rendering, "content": None, "source":  None, "target": None})
     
-    def _display_intervention_communication(self, intervention):
+    def _log_intervention_communication(self, intervention):
         """
         Displays the current intervention communication and stores it in a buffer for later use.
         """
@@ -992,6 +1078,8 @@ class TinyWorld:
         del state["agents"]
 
         # Deserialize Interventions
+        from tinytroupe.steering.intervention import Intervention
+
         self._interventions = []
         if "_interventions" in state and isinstance(state["_interventions"], list):
             for inter_data in state["_interventions"]:

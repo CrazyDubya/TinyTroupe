@@ -15,7 +15,7 @@ from datetime import datetime
 
 import tinytroupe
 import tinytroupe.utils as utils
-from tinytroupe.utils.serialization import compute_function_call_hash, compute_fallback_hash
+from tinytroupe.utils.serialization import compute_function_call_hash, ensure_serializable
 from tinytroupe import config_manager
 from tinytroupe.caching import SemanticCache, create_text_representation
 
@@ -47,7 +47,15 @@ class Simulation:
         self.name_to_environment = {} # {environment_name: environment, ...}
         self.status = Simulation.STATUS_STOPPED
 
-        self.cache_path = f"./tinytroupe-{id}.cache.json" # default cache path
+        # Use writable base dir to avoid permission errors (logs/cache share same root)
+        try:
+            from tinytroupe.utils.config import get_writable_data_dir
+            base = get_writable_data_dir()
+            data_dir = base / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self.cache_path = str(data_dir / f"tinytroupe-{id}.cache.json")
+        except Exception:
+            self.cache_path = f"./tinytroupe-{id}.cache.json"
         
         # should we always automatically checkpoint at the every transaction?
         self.auto_checkpoint = False
@@ -226,18 +234,10 @@ class Simulation:
         """
         Computes a stable hash for the given function call using deterministic serialization.
 
-        Uses the enhanced serialization utilities from tinytroupe.utils.serialization
-        for robust, canonical hash computation. Supports custom serializers for
-        complex objects and provides graceful fallback for unpickleable objects.
+        Uses tinytroupe.utils.serialization; unpickleable internals (e.g. threading.Lock)
+        are excluded so the primary path succeeds.
         """
-        try:
-            # Use the new serialization utility for deterministic hashing
-            return compute_function_call_hash(function_name, *args, **kwargs)
-        except Exception as e:
-            # Fallback to the fallback hash if serialization fails
-            logger.error(f"Error computing hash for function {function_name}: {e}")
-            logger.warning(f"FALLBACK_CACHE_KEY_USED for {function_name}.")
-            return compute_fallback_hash(function_name, args, kwargs)
+        return compute_function_call_hash(function_name, *args, **kwargs)
 
 
     def _skip_execution_with_cache(self):
@@ -278,7 +278,9 @@ class Simulation:
                         logger.error(f"Error while checking event hash match: {e}")
                         event_hash_match = False                    
                     
-                    prev_node_match = True # TODO implement real check
+                    # prev_node_hash chain is not computed in execution_trace (previous_hash is
+                    # always None in _add_to_execution_trace), so full chain verification is deferred
+                    prev_node_match = True
 
                     return event_hash_match and prev_node_match
                 
@@ -299,8 +301,9 @@ class Simulation:
                     else:
                         event_hash_match = False
 
-                    prev_node_match = True # TODO implement real check
-                    
+                    # prev_node_hash chain check deferred (see non-parallel branch)
+                    prev_node_match = True
+
                     return event_hash_match and prev_node_match
 
                 else:
@@ -632,11 +635,12 @@ class Simulation:
         """
         logger.debug(f"Now saving cache file to {cache_path}.")
         try:
-            # Create a temporary file
+            parent = os.path.dirname(cache_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            serializable = ensure_serializable(self.cached_trace)
             with tempfile.NamedTemporaryFile('w', delete=False) as temp:
-                json.dump(self.cached_trace, temp, indent=4)
-
-            # Replace the original file with the temporary file
+                json.dump(serializable, temp, indent=4)
             os.replace(temp.name, cache_path)
         except Exception as e:
             traceback_string = ''.join(traceback.format_tb(e.__traceback__))
@@ -659,7 +663,7 @@ class Simulation:
         """
         with concurrent_execution_lock:
             self._under_transaction[id] = True
-            self._clear_communications_buffers() # TODO <----------------------------------------------------------------
+            self._clear_communications_buffers()
     
     def end_transaction(self, id=None):
         """

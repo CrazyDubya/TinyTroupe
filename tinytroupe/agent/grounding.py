@@ -95,9 +95,6 @@ class BaseSemanticGroundingConnector(GroundingConnector):
                 store_nodes_override=True
             )
 
-        # TODO remove?
-        #self.add_documents(self.documents)        
-
     @staticmethod
     def _serialize_index(index):
         """Helper function to serialize index with proper storage context"""

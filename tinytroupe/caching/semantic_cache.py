@@ -224,6 +224,30 @@ class SemanticCache:
             logger.debug(f"Evicted {num_to_evict} semantic cache entries")
 
 
+def create_compact_text_representation(
+    function_name: str,
+    *args,
+    template_ref: str = None,
+    **kwargs,
+) -> str:
+    """
+    Create a compact text representation for cache keys, using optional template reference
+    to reduce redundancy when the same prompt template is repeated across many entries.
+
+    Use template_ref when the call uses a well-known template (e.g. persona base);
+    this reduces cache bloat from repeated full prompt text.
+    """
+    parts = [f"Function: {function_name}"]
+    if template_ref:
+        parts.append(f"TemplateRef: {template_ref}")
+    if args:
+        parts.append(f"Args: {len(args)} items")
+    if kwargs:
+        kw_items = sorted(kwargs.items())
+        parts.append(f"Kwargs: {', '.join(f'{k}={repr(v)[:50]}' for k, v in kw_items)}")
+    return " | ".join(parts)
+
+
 def create_text_representation(function_name: str, *args, **kwargs) -> str:
     """
     Create text representation of a function call for embedding.

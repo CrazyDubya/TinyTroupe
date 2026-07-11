@@ -10,6 +10,7 @@ sys.path.insert(0, '../../tinytroupe/')
 sys.path.insert(0, '../../')
 sys.path.insert(0, '..')
 
+from testing_utils import setup  # noqa: F401 - fixture
 from tinytroupe.control import Simulation
 from tinytroupe import config_manager
 

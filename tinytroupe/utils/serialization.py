@@ -3,11 +3,14 @@ Deterministic serialization utilities for cache key generation.
 
 This module provides robust, deterministic serialization for creating consistent
 cache keys across different executions. It handles complex nested structures,
-custom objects, and provides fallback mechanisms for unpickleable objects.
+custom objects, and excludes unpickleable internals (e.g. threading primitives)
+so the primary path succeeds without fallbacks.
 """
 import pickle
 import hashlib
+import inspect
 import json
+import threading
 from typing import Any, Callable, Dict, Optional, Tuple
 from collections import OrderedDict
 
@@ -17,6 +20,15 @@ logger = logging.getLogger("tinytroupe")
 
 # Registry for custom serializers for specific types
 _custom_serializers: Dict[type, Callable[[Any], Any]] = {}
+
+_THREAD_PRIMITIVE_TYPES = (
+    type(threading.Lock()),
+    type(threading.RLock()),
+    threading.Condition,
+    threading.Event,
+    threading.Semaphore,
+    threading.Thread,
+)
 
 
 def register_serializer(obj_type: type, serializer: Callable[[Any], Any]) -> None:
@@ -125,18 +137,42 @@ def make_canonical(data: Any) -> Any:
     elif isinstance(data, (int, str, float, bool, type(None), bytes)):
         return data
 
-    # For custom objects, try to use __dict__ or return as is for pickle
-    elif hasattr(data, '__dict__'):
-        # Attempt to canonicalize the object's __dict__
-        try:
-            return ('__custom_object__', type(data).__name__, make_canonical(data.__dict__))
-        except Exception as e:
-            logger.debug(f"Could not canonicalize __dict__ for {type(data).__name__}: {e}")
-            # Return the object as is and let pickle handle it
-            return data
+    # Threading primitives are unpickleable; use stable placeholder (excluded from cache key content)
+    elif isinstance(data, _THREAD_PRIMITIVE_TYPES):
+        return ("__thread_primitive__", type(data).__name__)
+
+    elif inspect.isfunction(data) or inspect.ismethod(data) or inspect.isbuiltin(data):
+        code = getattr(data, "__code__", None)
+        code_marker = None
+        if code is not None:
+            code_marker = (
+                code.co_filename,
+                code.co_firstlineno,
+                code.co_name,
+                code.co_code,
+                tuple(repr(const) for const in code.co_consts),
+                code.co_names,
+            )
+        return (
+            "__callable__",
+            getattr(data, "__module__", None),
+            getattr(data, "__qualname__", getattr(data, "__name__", type(data).__name__)),
+            code_marker,
+        )
+
+    # For custom objects, canonicalize __dict__ but exclude unpickleable attributes
+    elif hasattr(data, "__dict__"):
+        filtered = {}
+        for k, v in data.__dict__.items():
+            if isinstance(v, _THREAD_PRIMITIVE_TYPES):
+                continue
+            try:
+                filtered[k] = make_canonical(v)
+            except (TypeError, RecursionError):
+                filtered[k] = ("__unpickleable__", type(v).__name__, k)
+        return ("__custom_object__", type(data).__name__, tuple(sorted((k, filtered[k]) for k in filtered)))
 
     else:
-        # Return as is and let pickle attempt to handle it
         return data
 
 
@@ -227,23 +263,11 @@ def compute_function_call_hash(
         >>> h1 == h2  # Keyword argument order doesn't matter
         True
     """
-    try:
-        # Canonicalize arguments
-        canonical_args = make_canonical(args)
-
-        # Sort kwargs by key and canonicalize values
-        canonical_kwargs = tuple(sorted((k, make_canonical(v)) for k, v in kwargs.items()))
-
-        # Create composite representation
-        representation = (function_name, canonical_args, canonical_kwargs)
-
-        # Compute hash
-        return compute_hash(representation, algorithm=algorithm)
-
-    except SerializationError:
-        # If canonical serialization fails, try fallback
-        logger.warning(f"Using fallback hash for function {function_name}")
-        return compute_fallback_hash(function_name, args, kwargs, algorithm=algorithm)
+    # Canonicalize and hash; no fallback - primary path must succeed
+    canonical_args = make_canonical(args)
+    canonical_kwargs = tuple(sorted((k, make_canonical(v)) for k, v in kwargs.items()))
+    representation = (function_name, canonical_args, canonical_kwargs)
+    return compute_hash(representation, algorithm=algorithm)
 
 
 def compute_fallback_hash(
@@ -359,11 +383,15 @@ def ensure_serializable(data: Any) -> Any:
     if isinstance(data, dict):
         return {k: ensure_serializable(v) for k, v in data.items()}
     elif isinstance(data, (list, tuple)):
-        return type(data)(ensure_serializable(elem) for elem in data)
+        return [ensure_serializable(elem) for elem in data]
+    elif type(data).__name__ == "deque":
+        return [ensure_serializable(elem) for elem in data]
     elif isinstance(data, set):
         return tuple(ensure_serializable(elem) for elem in sorted(data, key=str))
     elif isinstance(data, (int, str, float, bool, type(None))):
         return data
+    elif type(data).__name__ in ("Lock", "RLock"):
+        return "<Lock>"
     elif hasattr(data, '__dict__'):
         # Attempt to serialize object's __dict__
         return {

@@ -10,6 +10,8 @@ sys.path.insert(0, '../../tinytroupe/')
 sys.path.insert(0, '../../')
 sys.path.insert(0, '..')
 
+from testing_utils import *
+
 from tinytroupe.utils.serialization import (
     make_canonical,
     compute_hash,
