@@ -5,11 +5,13 @@ This module enables TinyTroupe to use Ollama as an LLM provider,
 supporting local model inference.
 """
 
-import requests
 import json
 import logging
-from typing import Dict, Any, Optional
+import socket
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,9 @@ def _validate_base_url(base_url: str) -> str:
     """
     Validate that base_url is localhost only to prevent SSRF attacks.
 
+    Rejects userinfo and requires every resolved address to be loopback so a
+    hostname allowlist cannot be bypassed by DNS rebinding.
+
     Args:
         base_url: URL to validate
 
@@ -28,8 +33,12 @@ def _validate_base_url(base_url: str) -> str:
         Validated URL
 
     Raises:
-        ValueError: If URL is not localhost
+        ValueError: If URL is not localhost or does not resolve to loopback
     """
+    # Check for userinfo bypass before parsing
+    if '@' in base_url:
+        raise ValueError("Userinfo not allowed in URL")
+
     parsed = urlparse(base_url)
     if parsed.scheme not in ('http', 'https'):
         raise ValueError("Only http/https URLs allowed")
@@ -39,6 +48,19 @@ def _validate_base_url(base_url: str) -> str:
     # Only allow localhost
     if hostname not in ('localhost', '127.0.0.1', '::1'):
         raise ValueError("Only localhost URLs allowed for Ollama provider")
+
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+        for addr in addr_info:
+            ip = addr[4][0]
+            if ip.startswith('127.') or ip == '::1':
+                continue
+            raise ValueError(
+                f"Only localhost URLs allowed for Ollama provider (resolved to {ip})"
+            )
+    except socket.gaierror:
+        raise ValueError("Unable to resolve hostname")
+
     return base_url
 
 
