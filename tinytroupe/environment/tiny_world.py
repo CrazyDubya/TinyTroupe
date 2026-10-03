@@ -1016,6 +1016,8 @@ class TinyWorld:
         del to_copy['agents']
         del to_copy['name_to_agent']
         del to_copy['current_datetime']
+        # threading.Lock cannot be deep-copied or pickled
+        to_copy.pop('_metrics_lock', None)
         # del to_copy['_interventions'] # TODO: encode interventions # This line is removed
 
         # Serialize interventions to JSON dicts

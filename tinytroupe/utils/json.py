@@ -1,5 +1,6 @@
 import json
 import copy
+from collections import deque
 from pydantic import BaseModel
 
 from tinytroupe.utils import logger
@@ -46,6 +47,9 @@ class JsonSerializableRegistry:
                 # If it's a Pydantic model, convert it to a dict first
                 logger.debug(f"Serializing Pydantic model: {item}")
                 return item.model_dump(mode="json", exclude_unset=True)
+            elif isinstance(item, deque):
+                # deque is not JSON serializable; persist it as a list.
+                return [aux_serialize_item(element) for element in item]
             else:
                 return copy.deepcopy(item)
         
